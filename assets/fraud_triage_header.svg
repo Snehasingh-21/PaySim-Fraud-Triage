@@ -1,0 +1,68 @@
+<svg width="1600" height="228" viewBox="0 0 1600 228" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E1421"/>
+      <stop offset="1" stop-color="#111A2B"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#16233A"/>
+      <stop offset="1" stop-color="#10192A"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="228" rx="18" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1598" height="226" rx="17" stroke="#24324A" stroke-opacity="0.65"/>
+
+  <g opacity="0.14">
+    <path d="M0 46H1600M0 92H1600M0 138H1600M0 184H1600" stroke="#2E3E59"/>
+    <path d="M160 0V228M320 0V228M480 0V228M640 0V228M800 0V228M960 0V228M1120 0V228M1280 0V228M1440 0V228" stroke="#2E3E59"/>
+  </g>
+
+  <g>
+    <rect x="64" y="34" width="430" height="84" rx="12" fill="url(#card)" stroke="#2A3A57"/>
+    <text x="92" y="74" fill="#E8F0FF" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="24" font-weight="700">Mobile-Money Fraud Triage</text>
+    <text x="92" y="99" fill="#9FB0CC" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14">TRANSFER -> CASH_OUT chain monitoring</text>
+  </g>
+
+  <g>
+    <rect x="560" y="52" width="220" height="64" rx="12" fill="#102036" stroke="#2D4B75"/>
+    <text x="670" y="91" text-anchor="middle" fill="#D9E9FF" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20" font-weight="700">TRANSFER</text>
+
+    <rect x="920" y="52" width="220" height="64" rx="12" fill="#2A1720" stroke="#7A3449"/>
+    <text x="1030" y="91" text-anchor="middle" fill="#FFE2E8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20" font-weight="700">CASH_OUT</text>
+
+    <path d="M790 84H900" stroke="#6BC2FF" stroke-width="5" stroke-linecap="round"/>
+    <path d="M900 84L884 74M900 84L884 94" stroke="#6BC2FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <circle cx="850" cy="84" r="34" fill="#203044" opacity="0.5" filter="url(#soft)"/>
+    <circle cx="850" cy="84" r="3" fill="#6BC2FF"/>
+  </g>
+
+  <g transform="translate(1220 38)">
+    <path d="M56 10L94 26V70C94 103 78 122 56 136C34 122 18 103 18 70V26L56 10Z" fill="#12304A" stroke="#4D95C7" stroke-width="3"/>
+    <path d="M42 72L52 82L72 60" stroke="#80E3A9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g transform="translate(1166 118)">
+    <circle cx="0" cy="0" r="22" fill="#3B1E22" stroke="#D25C62" stroke-width="3"/>
+    <path d="M0 -9V2" stroke="#FFD5D8" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="0" cy="11" r="3" fill="#FFD5D8"/>
+  </g>
+
+  <g>
+    <rect x="480" y="132" width="640" height="84" rx="14" fill="#10192A" stroke="#2A3A57"/>
+    <text x="516" y="162" fill="#C7D6EE" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600">TRIAGE</text>
+
+    <rect x="516" y="172" width="176" height="26" rx="13" fill="#1B5E36"/>
+    <text x="604" y="190" text-anchor="middle" fill="#E8FFF1" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700">GREEN</text>
+
+    <rect x="712" y="172" width="176" height="26" rx="13" fill="#6A5312"/>
+    <text x="800" y="190" text-anchor="middle" fill="#FFF6DD" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700">YELLOW</text>
+
+    <rect x="908" y="172" width="176" height="26" rx="13" fill="#6F1D25"/>
+    <text x="996" y="190" text-anchor="middle" fill="#FFE6EA" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700">RED</text>
+  </g>
+</svg>

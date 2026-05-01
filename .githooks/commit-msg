@@ -1,0 +1,9 @@
+#!/bin/sh
+# Strips Cursor trailer so GitHub does not credit cursoragent. Enable once: git config core.hooksPath .githooks
+f="$1"
+[ -n "$f" ] && [ -f "$f" ] || exit 0
+t=$(mktemp)
+trap 'rm -f "$t"' EXIT
+grep -v '^Co-authored-by: Cursor <cursoragent@cursor\.com>$' "$f" > "$t" || true
+mv "$t" "$f"
+trap - EXIT

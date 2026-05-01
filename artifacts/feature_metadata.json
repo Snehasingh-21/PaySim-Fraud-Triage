@@ -1,0 +1,78 @@
+{
+  "input_feature_columns": [
+    "step",
+    "type",
+    "oldbalanceOrg",
+    "newbalanceOrig",
+    "oldbalanceDest",
+    "newbalanceDest",
+    "orig_delta",
+    "dest_delta",
+    "orig_residual",
+    "orig_zero_old",
+    "dest_zero_old",
+    "orig_zero_new",
+    "dest_zero_new",
+    "log_amount",
+    "chain_size",
+    "is_chain_member"
+  ],
+  "processed_feature_names": [
+    "num__step",
+    "num__oldbalanceOrg",
+    "num__newbalanceOrig",
+    "num__oldbalanceDest",
+    "num__newbalanceDest",
+    "num__orig_delta",
+    "num__dest_delta",
+    "num__orig_residual",
+    "num__orig_zero_old",
+    "num__dest_zero_old",
+    "num__orig_zero_new",
+    "num__dest_zero_new",
+    "num__log_amount",
+    "num__chain_size",
+    "num__is_chain_member",
+    "cat__type_CASH_IN",
+    "cat__type_CASH_OUT",
+    "cat__type_DEBIT",
+    "cat__type_PAYMENT",
+    "cat__type_TRANSFER"
+  ],
+  "triage_thresholds": {
+    "operating_threshold": 0.5,
+    "review_threshold": 0.4,
+    "block_threshold": 0.6,
+    "moderate_cutoff": 0.4
+  },
+  "chain_size_cap": 12,
+  "final_model_key": "rf_plain_sigmoid",
+  "final_model_reason": "Selected rf_plain_sigmoid dynamically within RF family using lowest Brier (tol=1e-07), then highest PR-AUC, then highest ROC-AUC. Values => Brier=0.00000328, PR-AUC=0.998508, ROC-AUC=0.999645.",
+  "calibration_selection_rule": "lowest_brier_then_higher_pr_auc_then_higher_roc_auc_within_rf_family",
+  "calibration_comparison_table": [
+    {
+      "model": "rf_plain_sigmoid",
+      "brier": 3.276362509279825e-06,
+      "pr_auc": 0.9985080292924411,
+      "roc_auc": 0.9996450794549318
+    },
+    {
+      "model": "rf_plain_isotonic",
+      "brier": 3.33893503246502e-06,
+      "pr_auc": 0.9982389037531602,
+      "roc_auc": 0.9996456881546493
+    },
+    {
+      "model": "rf_plain_uncalibrated",
+      "brier": 7.460453206561143e-06,
+      "pr_auc": 0.9985080292924411,
+      "roc_auc": 0.9996450794549316
+    }
+  ],
+  "calibration_model_file_map": {
+    "rf_plain_uncalibrated": "rf_plain_base.joblib",
+    "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
+    "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib"
+  },
+  "notes": "Artifacts: RF base + dynamic RF-family calibrated deployment path; chain features computed per split (train/test) to match notebook leakage-safe evaluation."
+}

@@ -1,0 +1,68 @@
+<svg width="1600" height="220" viewBox="0 0 1600 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#091224"/>
+      <stop offset="1" stop-color="#101e35"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#13243f"/>
+      <stop offset="1" stop-color="#101b2f"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1220 72) rotate(90) scale(66 66)">
+      <stop stop-color="#62b9ff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#62b9ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="220" rx="16" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1598" height="218" rx="15" stroke="#2a4365" stroke-opacity="0.6"/>
+  <circle cx="1220" cy="72" r="66" fill="url(#orb)"/>
+
+  <g opacity="0.1">
+    <path d="M0 55H1600M0 110H1600M0 165H1600" stroke="#2d3f5a"/>
+    <path d="M200 0V220M400 0V220M600 0V220M800 0V220M1000 0V220M1200 0V220M1400 0V220" stroke="#2d3f5a"/>
+  </g>
+
+  <rect x="20" y="14" width="980" height="80" rx="12" fill="url(#panel)" stroke="#315076"/>
+  <text x="46" y="49" fill="#ecf4ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="36" font-weight="800">FRAUD TRIAGE COMMAND CENTER</text>
+  <text x="46" y="76" fill="#8fcfff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600">Chain-aware scoring, calibrated risk outputs, business policy decisions</text>
+
+  <rect x="1020" y="20" width="260" height="30" rx="9" fill="#132843" stroke="#355882"/>
+  <text x="1150" y="40" text-anchor="middle" fill="#e7f2ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700">Dataset ~6.36M rows</text>
+
+  <rect x="1292" y="20" width="288" height="30" rx="9" fill="#2a1d2a" stroke="#5e4a7e"/>
+  <text x="1436" y="40" text-anchor="middle" fill="#f4eaff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700">Fraud prevalence ~0.13%</text>
+
+  <rect x="20" y="102" width="1560" height="102" rx="12" fill="#101c31" stroke="#2c476a"/>
+  <text x="46" y="129" fill="#8fd0ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="24" font-weight="700">Decision Pipeline</text>
+
+  <g transform="translate(26 149)">
+    <rect x="0" y="0" width="176" height="36" rx="18" fill="#183354" stroke="#45709c"/>
+    <text x="88" y="24" text-anchor="middle" fill="#e8f3ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">INPUT</text>
+    <path d="M184 18H214" stroke="#69c7ff" stroke-width="4" stroke-linecap="round"/>
+    <path d="M214 18L205 12M214 18L205 24" stroke="#69c7ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="222" y="0" width="194" height="36" rx="18" fill="#183354" stroke="#45709c"/>
+    <text x="319" y="24" text-anchor="middle" fill="#e8f3ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">FEATURES</text>
+    <path d="M424 18H454" stroke="#69c7ff" stroke-width="4" stroke-linecap="round"/>
+    <path d="M454 18L445 12M454 18L445 24" stroke="#69c7ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="462" y="0" width="162" height="36" rx="18" fill="#1a3550" stroke="#45709c"/>
+    <text x="543" y="24" text-anchor="middle" fill="#e8f3ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">MODEL</text>
+    <path d="M632 18H662" stroke="#69c7ff" stroke-width="4" stroke-linecap="round"/>
+    <path d="M662 18L653 12M662 18L653 24" stroke="#69c7ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="670" y="0" width="236" height="36" rx="18" fill="#213553" stroke="#4d78a4"/>
+    <text x="788" y="24" text-anchor="middle" fill="#e8f3ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">CALIBRATION</text>
+    <path d="M914 18H944" stroke="#79d2ff" stroke-width="4" stroke-linecap="round"/>
+    <path d="M944 18L935 12M944 18L935 24" stroke="#79d2ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="952" y="0" width="196" height="36" rx="18" fill="#2d4a34" stroke="#6ea37c"/>
+    <text x="1050" y="24" text-anchor="middle" fill="#eefff3" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">CHAIN RULE</text>
+    <path d="M1156 18H1186" stroke="#7adba6" stroke-width="4" stroke-linecap="round"/>
+    <path d="M1186 18L1177 12M1186 18L1177 24" stroke="#7adba6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="1194" y="0" width="184" height="36" rx="18" fill="#1f5338" stroke="#62af85"/>
+    <text x="1286" y="24" text-anchor="middle" fill="#ecfff4" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">TRIAGE</text>
+  </g>
+</svg>

@@ -1,0 +1,40 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# PaySim raw log is very large — fetch locally or use Git LFS if you must version it
+PS_20174392719_1491204439457_log.csv
+
+# Optional: do not commit trained weights (regenerate with `python build_artifacts.py`)
+# artifacts/
+
+# Local / env secrets
+.env
+.env.*
+
+# Local tooling/cache files (do not share)
+.claude/
+.cursor/
+.cache/
+.matplotlib/
+.vscode/
+01_eda_paysim_smoke.html
+preprocessor_paysim.joblib
+!artifacts/preprocessor_paysim.joblib
