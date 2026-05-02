@@ -2,6 +2,10 @@
 
 **Course / research-style ML project** on the synthetic **PaySim** mobile-money dataset: exploratory analysis, **leakage-aware** feature design, **no-chain vs chain-aware** model comparison, **probability calibration**, **cost-sensitive** triage rules, and a **Streamlit** deployment for interactive and batch scoring.
 
+![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)
+
+*Proposed solution overview: PaySim → EDA → stratified split → split-safe chain discovery & features → preprocessing → model comparison → RF (chain-aware) + calibration → triage; plus validation (SHAP/LIME, bootstrap CI, error analysis, drift/PSI) and Streamlit deployment.*
+
 ---
 
 ## Abstract (problem & goal)
