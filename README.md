@@ -126,14 +126,6 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 **SHAP global summary (feature impact):**
 ![SHAP summary](assets/image-df7adac4-79f9-4057-a503-cda45689f81c.png)
 
-### C) Chain-aware framework diagrams
-
-These two figures also appear **at the top of this README** (framework first, flowchart immediately after).
-
-![Chain-aware fraud detection & triage framework](assets/ml_framework_chain_aware.png)
-
-![ML framework chain-aware flowchart — calibration, triage policy, artifact export, Streamlit](assets/ml_flow_diagram_chain_aware.png)
-
 ---
 
 ## Tech stack
