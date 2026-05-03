@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+from typing import Any, Optional
 import base64
 import hashlib
 import os
@@ -39,7 +40,28 @@ COST_FN = 500
 # Bump when the analyst prompt changes so cached summaries are not reused across app versions.
 OLLAMA_ANALYST_PROMPT_VERSION = 5
 BUILD_SCRIPT_PATH = _APP_ROOT / "build_artifacts.py"
-AUTO_REBUILD_TIMEOUT_SEC = int(os.getenv("AUTO_REBUILD_TIMEOUT_SEC", "1800"))
+
+# When notebook is newer than artifacts (or required files missing), optionally run RF `build_artifacts.py`.
+# Deploy finalist stays dynamic (CatBoost preserved if `.joblib` + map remain after merge). Disable with AUTO_REBUILD_IF_STALE=0.
+AUTO_REBUILD_IF_STALE_DEFAULT = "1"
+
+
+def _auto_rebuild_timeout_seconds() -> Optional[int]:
+    """
+    Seconds for subprocess.run on build_artifacts.py. None = no limit.
+    AUTO_REBUILD_TIMEOUT_SEC: default 7200 (2h). Use 0, negative, or "none"/"inf" for unlimited.
+    """
+    raw_default = "7200"
+    raw = str(os.getenv("AUTO_REBUILD_TIMEOUT_SEC", raw_default)).strip().lower()
+    if raw in {"none", "inf", "infinite"}:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        n = int(raw_default)
+    if n <= 0:
+        return None
+    return n
 
 
 def _resolve_paysim_csv() -> Path:
@@ -97,19 +119,20 @@ def _artifacts_stale() -> bool:
 
 def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
     """
-    Rebuild artifacts only when missing/stale, and only when explicitly enabled.
-    Safe behavior:
-    - Stale = notebook (default `01_eda_paysim.ipynb`, or `PAYSIM_NOTEBOOK`) newer than artifacts
-      — not `build_artifacts.py` alone.
-    - If data CSV is missing, skip auto-rebuild quietly (existing artifacts still load).
-    - If rebuild fails, surface error details to help local debugging.
+    Run RF ``build_artifacts.py`` when stale/missing unless ``AUTO_REBUILD_IF_STALE=0``.
+    ``feature_metadata.json`` merge keeps CatBoost/XGB deploy when those joblibs + map survive the run.
+
+    ``needs_rebuild`` = missing required paths OR notebook newer than artifact mtimes (see ``_artifacts_stale``).
+    If PaySim CSV is missing, skips quietly.
     """
-    if not _env_flag("AUTO_REBUILD_IF_STALE", "1"):
+    if not _env_flag("AUTO_REBUILD_IF_STALE", AUTO_REBUILD_IF_STALE_DEFAULT):
         return False, ""
     if not BUILD_SCRIPT_PATH.exists():
         return False, ""
 
-    needs_rebuild = _artifacts_missing() or _artifacts_stale()
+    missing = _artifacts_missing()
+    stale = _artifacts_stale()
+    needs_rebuild = missing or stale
     if not needs_rebuild:
         return False, ""
 
@@ -119,14 +142,28 @@ def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
             "Using existing artifacts if available."
         )
 
-    result = subprocess.run(
-        [sys.executable, str(BUILD_SCRIPT_PATH)],
-        cwd=str(_APP_ROOT),
-        capture_output=True,
-        text=True,
-        timeout=AUTO_REBUILD_TIMEOUT_SEC,
-        check=False,
-    )
+    timeout_sec = _auto_rebuild_timeout_seconds()
+    try:
+        result = subprocess.run(
+            [sys.executable, str(BUILD_SCRIPT_PATH)],
+            cwd=str(_APP_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        hint = (
+            "Increase `AUTO_REBUILD_TIMEOUT_SEC` (seconds) or set it to `0` for no limit. "
+            "Or run `python build_artifacts.py` manually if you enabled RF bootstrap. "
+            "Default deploy path: Jupyter §12.9c export (no RF auto-rebuild)."
+        )
+        limit = "no timeout configured" if timeout_sec is None else f"{timeout_sec}s limit"
+        raise RuntimeError(
+            "Auto-rebuild timed out while running build_artifacts.py "
+            f"({limit} on full PaySim can exceed 30 minutes). "
+            + hint
+        ) from None
     if result.returncode != 0:
         stderr_tail = (result.stderr or "").strip()[-600:]
         stdout_tail = (result.stdout or "").strip()[-600:]
@@ -138,6 +175,67 @@ def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
     return True, "Artifacts were auto-rebuilt from `build_artifacts.py` (missing/stale detected)."
 
 
+def _unwrap_sklearn_calibrated_estimator(est: Any) -> Any:
+    """Prefer the inner fitted estimator from sklearn CalibratedClassifierCV (if present)."""
+    cals = getattr(est, "calibrated_classifiers_", None)
+    if not cals:
+        return est
+    try:
+        first = cals[0]
+        inner = getattr(first, "estimator", None)
+        if inner is not None:
+            return inner
+    except Exception:
+        pass
+    return est
+
+
+def _shap_explainer_candidates(cal_model: Any, rf_fallback: Any) -> list[Any]:
+    """Order matters: inner calibrator → full calibrator → RF fallback."""
+    out: list[Any] = []
+    seen: set[int] = set()
+
+    def push(e: Any) -> None:
+        if e is None:
+            return
+        i = id(e)
+        if i in seen:
+            return
+        seen.add(i)
+        out.append(e)
+
+    inner = _unwrap_sklearn_calibrated_estimator(cal_model)
+    if inner is not cal_model:
+        push(inner)
+    push(cal_model)
+    push(rf_fallback)
+    return out
+
+
+def _pick_tree_estimator_for_shap_and_baseline(cal_model: Any, rf_fallback: Any) -> tuple[Any, str]:
+    """
+    Mirror notebook intent: Tree SHAP + “baseline probability” align with deploy model family when possible.
+    Falls back to `rf_plain_base.joblib` if TreeExplainer cannot wrap the deploy object.
+    """
+    try:
+        import shap  # type: ignore
+    except Exception:
+        est = rf_fallback
+        return est, f"`{type(est).__name__}` (`rf_plain_base.joblib`; SHAP not installed)"
+
+    last_err = ""
+    for est in _shap_explainer_candidates(cal_model, rf_fallback):
+        try:
+            shap.TreeExplainer(est)
+            if id(est) == id(rf_fallback):
+                return est, "`rf_plain_base.joblib` (TreeExplainer fallback)"
+            return est, f"`{type(est).__name__}` unwrapped from deploy calibrator (same family as scoring)"
+        except Exception as exc:
+            last_err = str(exc)[:180]
+            continue
+    return rf_fallback, f"`rf_plain_base.joblib` (fallback — deploy explainer error: {last_err})"
+
+
 @st.cache_resource(show_spinner=False)
 def load_artifacts(artifact_cache_key: str):
     missing = [p for p in [PREPROCESSOR_PATH, BASE_MODEL_PATH, META_PATH] if not p.exists()]
@@ -146,11 +244,13 @@ def load_artifacts(artifact_cache_key: str):
         raise FileNotFoundError(
             "Missing artifacts:\n"
             f"{missing_text}\n\n"
-            "Run `python build_artifacts.py` once before starting Streamlit."
+            "Export from Jupyter (notebook §12.9c) with project-root cwd, "
+            "or run `python build_artifacts.py` for RF fallback only "
+            "(unset `AUTO_REBUILD_IF_STALE` or use `AUTO_REBUILD_IF_STALE=0` to disable auto RF rebuild)."
         )
 
     preprocessor = joblib.load(PREPROCESSOR_PATH)
-    base_model = joblib.load(BASE_MODEL_PATH)
+    rf_plain_fallback = joblib.load(BASE_MODEL_PATH)
     metadata = json.loads(META_PATH.read_text())
 
     # Defaults cover build_artifacts.py / minimal exports; notebook JSON adds CatBoost, XGBoost, etc.
@@ -193,8 +293,11 @@ def load_artifacts(artifact_cache_key: str):
             "Ensure the matching joblib exists next to feature_metadata.json."
         )
     cal_model = joblib.load(cal_model_path)
+    base_model, shap_ui_hint = _pick_tree_estimator_for_shap_and_baseline(cal_model, rf_plain_fallback)
     metadata["resolved_calibration_model_file"] = cal_model_file
     metadata["resolved_final_model_key"] = final_model_key
+    metadata["tree_shap_baseline_explainer_hint"] = shap_ui_hint
+    metadata["tree_shap_backend_class"] = type(base_model).__name__
     return preprocessor, base_model, cal_model, metadata
 
 
@@ -217,6 +320,184 @@ def load_model_card_text(model_card_mtime: float):
     if not MODEL_CARD_PATH.exists():
         return None
     return MODEL_CARD_PATH.read_text(encoding="utf-8")
+
+
+
+
+def apply_live_metadata_to_model_card(md: str, metadata: dict) -> str:
+    """Patch MODEL_CARD.md text so §§7–§8 numeric lines match loaded `artifacts/feature_metadata.json` (same tab layout)."""
+    out = md
+
+    def _gf(x: float) -> str:
+        return format(float(x), "g")
+
+    fk = str(metadata.get("resolved_final_model_key") or metadata.get("final_model_key") or "").strip()
+
+    cs = metadata.get("cost_sensitive_policy") or {}
+    if "cost_fp" in cs:
+        out = re.sub(
+            r"- false positive cost = \*\*\d+\*\*",
+            f"- false positive cost = **{int(cs['cost_fp'])}**",
+            out,
+            count=1,
+        )
+    if "cost_fn" in cs:
+        out = re.sub(
+            r"- false negative cost = \*\*\d+\*\*",
+            f"- false negative cost = **{int(cs['cost_fn'])}**",
+            out,
+            count=1,
+        )
+
+    tn = metadata.get("triage_thresholds") or {}
+    if tn:
+        rr = float(tn["review_threshold"])
+        blk = float(tn["block_threshold"])
+        mod = float(tn["moderate_cutoff"])
+        op = float(tn.get("operating_threshold", rr))
+        rr_s, blk_s, mod_s, op_s = _gf(rr), _gf(blk), _gf(mod), _gf(op)
+
+        out = re.sub(r"- `review_threshold` = \*\*[\d.]+\*\*", f"- `review_threshold` = **{rr_s}**", out, count=1)
+        out = re.sub(r"- `block_threshold` = \*\*[\d.]+\*\*", f"- `block_threshold` = **{blk_s}**", out, count=1)
+        out = re.sub(r"- `moderate_cutoff` = \*\*[\d.]+\*\*", f"- `moderate_cutoff` = **{mod_s}**", out, count=1)
+        out = re.sub(
+            r"- `operating_threshold` \(cost-optimal scalar search\) = \*\*[\d.]+\*\*",
+            f"- `operating_threshold` (cost-optimal scalar search) = **{op_s}**",
+            out,
+            count=1,
+        )
+
+        cap_i = metadata.get("chain_size_cap")
+        if cap_i is not None:
+            out = re.sub(
+                r"- `chain_size_cap` = \*\*\d+\*\*",
+                f"- `chain_size_cap` = **{int(cap_i)}**",
+                out,
+                count=1,
+            )
+
+        out = re.sub(
+            r"- If `p < [\d.]+` → \*\*GREEN\*\*",
+            f"- If `p < {rr_s}` → **GREEN**",
+            out,
+            count=1,
+        )
+        out = re.sub(
+            r"- Else if `[\d.]+\s*<= p < [\d.]+` → \*\*YELLOW\*\*",
+            f"- Else if `{rr_s} <= p < {blk_s}` → **YELLOW**",
+            out,
+            count=1,
+        )
+        out = re.sub(
+            r"- Else `p >= [\d.]+` → \*\*RED\*\*",
+            f"- Else `p >= {blk_s}` → **RED**",
+            out,
+            count=1,
+        )
+        out = re.sub(
+            r"`p >= moderate_cutoff` \(\d\.?\d*\)",
+            f"`p >= moderate_cutoff` ({escape(mod_s)})",
+            out,
+            count=1,
+        )
+
+    if fk:
+        out = re.sub(
+            r"\(often \*\*`[^`]+`\*\*\) from the calibrated comparison table",
+            f"(often **`{fk}`**) from the calibrated comparison table",
+            out,
+            count=1,
+        )
+        out = re.sub(
+            r"\(selected scorer: \*\*`[^`]+`\*\*\)",
+            f"(selected scorer: **`{fk}`**)",
+            out,
+            count=1,
+        )
+
+    scm = metadata.get("selected_calibration_metrics_test") or {}
+    if scm.get("pr_auc") is not None:
+        out = re.sub(
+            r"(\| PR-AUC \(test, calibrated deploy model\) \| )[^|]*(\|)",
+            rf"\g<1>{scm['pr_auc']}",
+            out,
+            count=1,
+        )
+    if scm.get("brier") is not None:
+        out = re.sub(
+            r"(\| Brier Score \| )[^|]*(\|)",
+            rf"\g<1>{scm['brier']}",
+            out,
+            count=1,
+        )
+    if scm.get("roc_auc") is not None:
+        out = re.sub(
+            r"(\| ROC-AUC \| )[^|]*(\|)",
+            rf"\g<1>{scm['roc_auc']}",
+            out,
+            count=1,
+        )
+
+    ts_snap = metadata.get("triage_snapshot") or {}
+    bef = ts_snap.get("fraud_capture_in_red_before_pct")
+    aft = ts_snap.get("fraud_capture_in_red_after_pct")
+    if bef is not None and aft is not None:
+        fraud_cell = f"{float(bef):.4f}% → {float(aft):.4f}%"
+        out = re.sub(
+            r"(\| Fraud captured in RED \(before → after escalation\) \| )[^|]*(\|)",
+            rf"\g<1>{fraud_cell}",
+            out,
+            count=1,
+        )
+    if ts_snap.get("legitimate_in_green_pct") is not None:
+        pct = float(ts_snap["legitimate_in_green_pct"])
+        lc = format(pct, ".6f").rstrip("0").rstrip(".") + "%"
+        out = re.sub(
+            r"(\| Legitimate allowed \(GREEN\) \| )[^|]*(\|)",
+            rf"\g<1>{lc}",
+            out,
+            count=1,
+        )
+
+    boot = metadata.get("bootstrap_prauc_snapshot") or {}
+    if boot.get("pr_auc_point") is not None:
+        out = re.sub(
+            r"(\| PR-AUC point estimate \| )[^|]*(\|)",
+            rf"\g<1>{boot['pr_auc_point']}",
+            out,
+            count=1,
+        )
+    if boot.get("pr_auc_bootstrap_mean") is not None:
+        out = re.sub(
+            r"(\| Bootstrap mean PR-AUC \| )[^|]*(\|)",
+            rf"\g<1>{boot['pr_auc_bootstrap_mean']}",
+            out,
+            count=1,
+        )
+    if boot.get("ci_lower") is not None:
+        out = re.sub(
+            r"(\| 95% CI lower \| )[^|]*(\|)",
+            rf"\g<1>{boot['ci_lower']}",
+            out,
+            count=1,
+        )
+    if boot.get("ci_upper") is not None:
+        out = re.sub(
+            r"(\| 95% CI upper \| )[^|]*(\|)",
+            rf"\g<1>{boot['ci_upper']}",
+            out,
+            count=1,
+        )
+    vr, nb = boot.get("valid_runs"), boot.get("n_boot_requested")
+    if vr is not None and nb is not None:
+        out = re.sub(
+            r"(\| Valid bootstrap runs \| )[^|]*(\|)",
+            rf"\g<1>{int(vr)} / {int(nb)}",
+            out,
+            count=1,
+        )
+
+    return out
 
 
 def add_engineered_features_for_inference(
@@ -850,7 +1131,8 @@ def run_inference(
     for c in engineered_debug_cols:
         if c in df_feat.columns:
             out[c] = df_feat[c]
-    out["base_rf_probability"] = base_prob
+    out["base_probability"] = base_prob
+    out["base_rf_probability"] = base_prob  # legacy column name / CSV schemas
     out["calibrated_probability"] = calibrated_prob
     out["chain_size"] = out["chain_size"].astype(int)
     out["is_chain_member"] = out["is_chain_member"].astype(int)
@@ -1097,7 +1379,7 @@ def build_banner_html(image_path: str | Path, border_radius_px: int = 18) -> str
 
 
 def main():
-    st.set_page_config(page_title="PaySim Fraud Triage", page_icon="🛡️", layout="wide")
+    st.set_page_config(page_title="PaySim Fraud Triage App", page_icon="🛡️", layout="wide")
     st.markdown(
         """
         <style>
@@ -1297,20 +1579,72 @@ def main():
         [data-testid="stMetricDelta"] * {
             opacity: 1 !important;
         }
-        /* global tooltip readability (Streamlit + BaseWeb + Vega) */
+        /* Streamlit 1.4x help/tooltip markdown (Popover body is data-testid=stTooltipContent) */
+        div[data-testid="stTooltipContent"],
+        div[data-testid="stTooltipErrorContent"] {
+            background: #eef3ff !important;
+            background-color: #eef3ff !important;
+            color: #081018 !important;
+            border: 1px solid #5a7fba !important;
+            box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45) !important;
+            font-size: 0.9rem !important;
+            line-height: 1.4 !important;
+            z-index: 100055 !important;
+        }
+        div[data-testid="stTooltipContent"] *,
+        div[data-testid="stTooltipErrorContent"] * {
+            color: #081018 !important;
+            -webkit-text-fill-color: #081018 !important;
+            opacity: 1 !important;
+        }
+        div[data-testid="stTooltipContent"] p,
+        div[data-testid="stTooltipErrorContent"] p,
+        div[data-testid="stTooltipContent"] [data-testid="stMarkdownContainer"] p,
+        div[data-testid="stTooltipErrorContent"] [data-testid="stMarkdownContainer"] p {
+            color: #081018 !important;
+            -webkit-text-fill-color: #081018 !important;
+        }
+        div[data-testid="stDataFrameTooltipContent"],
+        div[data-testid="stDataFrameTooltipContent"] * {
+            background-color: #eef3ff !important;
+            color: #081018 !important;
+            -webkit-text-fill-color: #081018 !important;
+        }
+        /* global tooltip readability (Streamlit BaseWeb + Radix portals + Vega) */
         [role="tooltip"],
         div[data-baseweb="tooltip"] {
-            background: #f8fbff !important;
-            color: #0f172a !important;
-            border: 1px solid #9fb6d9 !important;
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25) !important;
+            background: #f0f4ff !important;
+            color: #0b1220 !important;
+            border: 1px solid #6b8cc4 !important;
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38) !important;
             opacity: 1 !important;
-            font-size: 0.86rem !important;
+            font-size: 0.9rem !important;
+            z-index: 100050 !important;
         }
         [role="tooltip"] *,
         div[data-baseweb="tooltip"] * {
-            color: #0f172a !important;
-            -webkit-text-fill-color: #0f172a !important;
+            color: #0b1220 !important;
+            -webkit-text-fill-color: #0b1220 !important;
+            opacity: 1 !important;
+        }
+        /* Streamlit help (?): often mounted in a Radix/floating-ui popper wrapper */
+        [data-radix-popper-content-wrapper] {
+            z-index: 100050 !important;
+        }
+        [data-radix-popper-content-wrapper] > div {
+            background: #f0f4ff !important;
+            color: #0b1220 !important;
+            border: 1px solid #6b8cc4 !important;
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38) !important;
+            font-size: 0.9rem !important;
+            line-height: 1.35 !important;
+        }
+        [data-radix-popper-content-wrapper] p,
+        [data-radix-popper-content-wrapper] span,
+        [data-radix-popper-content-wrapper] div,
+        [data-radix-popper-content-wrapper] li {
+            color: #0b1220 !important;
+            -webkit-text-fill-color: #0b1220 !important;
             opacity: 1 !important;
         }
         .vg-tooltip {
@@ -1398,12 +1732,51 @@ def main():
         """,
         unsafe_allow_html=True,
     )
+
+    artifact_build_loading = (
+        _env_flag("AUTO_REBUILD_IF_STALE", AUTO_REBUILD_IF_STALE_DEFAULT)
+        and BUILD_SCRIPT_PATH.exists()
+        and (_artifacts_missing() or _artifacts_stale())
+        and DATA_PATH.exists()
+    )
+
+    # Rebuild path: only this message + spinner until build finishes; no tabs (they render below after load_artifacts).
+    _artifact_build_placeholder = st.empty()
+    rebuilt = False
+    rebuild_note = ""
+    try:
+        if artifact_build_loading:
+            with _artifact_build_placeholder.container():
+                st.info(
+                    "**Loading `build_artifacts.py`…** Please wait. "
+                    "When this finishes, this message goes away and the app opens with tabs."
+                )
+            with st.spinner("Running `build_artifacts.py` — please wait…"):
+                rebuilt, rebuild_note = maybe_auto_rebuild_artifacts()
+        else:
+            rebuilt, rebuild_note = maybe_auto_rebuild_artifacts()
+    except Exception as e:
+        # Non-fatal: app can still proceed with existing artifacts if present.
+        st.warning(str(e))
+    finally:
+        if artifact_build_loading:
+            _artifact_build_placeholder.empty()
+
+    if rebuild_note and not rebuilt:
+        st.caption(rebuild_note)
+
+    try:
+        preprocessor, base_model, cal_model, metadata = load_artifacts(build_artifact_cache_key())
+    except Exception as e:
+        st.error(str(e))
+        st.stop()
+
     if TITLE_ICON_PATH.exists():
         title_icon_b64 = base64.b64encode(TITLE_ICON_PATH.read_bytes()).decode("utf-8")
         st.markdown(
             f"""
             <h1 style="margin:0;display:flex;align-items:center;gap:16px;font-weight:900;">
-              <span>PaySim Fraud Triage — calibrated scoring</span>
+              <span>PaySim Fraud Triage App</span>
               <img src="data:image/png;base64,{title_icon_b64}" alt="Calibration icon"
                    style="height:70px;width:auto;display:inline-block;vertical-align:middle;" />
             </h1>
@@ -1411,7 +1784,7 @@ def main():
             unsafe_allow_html=True,
         )
     else:
-        st.title("PaySim Fraud Triage — calibrated scoring")
+        st.title("PaySim Fraud Triage App")
     st.caption("Fast demo for fraud triage decisions using the final calibrated model.")
     _dyn_bits = []
     if os.getenv("PAYSIM_CSV") or os.getenv("PAYSIM_DATA_PATH") or os.getenv("PAYSIM_CSV_NAME"):
@@ -1420,39 +1793,6 @@ def main():
         _dyn_bits.append(f"**Notebook (stale check):** `{NOTEBOOK_PATH}`")
     if _dyn_bits:
         st.caption(" · ".join(_dyn_bits))
-
-    try:
-        will_auto_rebuild = (
-            _env_flag("AUTO_REBUILD_IF_STALE", "1")
-            and BUILD_SCRIPT_PATH.exists()
-            and (_artifacts_missing() or _artifacts_stale())
-            and DATA_PATH.exists()
-        )
-        if will_auto_rebuild:
-            with st.spinner("Rebuilding artifacts (build_artifacts.py)... please wait."):
-                rebuilt, rebuild_note = maybe_auto_rebuild_artifacts()
-        else:
-            rebuilt, rebuild_note = maybe_auto_rebuild_artifacts()
-        # Keep the success path silent so the page returns to normal content after load.
-        # Only show non-success notes (e.g., skipped rebuild because CSV is missing).
-        if rebuild_note and not rebuilt:
-            st.caption(rebuild_note)
-    except Exception as e:
-        # Non-fatal: app can still proceed with existing artifacts if present.
-        st.warning(str(e))
-
-    try:
-        preprocessor, base_model, cal_model, metadata = load_artifacts(build_artifact_cache_key())
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
-
-    _fk_live = str(metadata.get("resolved_final_model_key", metadata.get("final_model_key", ""))).strip()
-    if _fk_live:
-        st.caption(
-            f"Loaded deploy calibrator: `{escape(_fk_live)}` "
-            "(from `artifacts/feature_metadata.json`). Local SHAP uses `rf_plain_base.joblib`."
-        )
 
     overview_tab, dashboard_tab, batch_tab, drift_tab, model_card_tab = st.tabs(
         ["Command Center", "Dashboard", "Batch upload", "Drift Monitor", "Model Card"]
@@ -1463,6 +1803,7 @@ def main():
         t = metadata.get("triage_thresholds", {})
         review_t = float(t.get("review_threshold", 0.0))
         block_t = float(t.get("block_threshold", 0.0))
+        moderate_t = float(t.get("moderate_cutoff", t.get("review_threshold", 0.0)))
         artifact_paths = [META_PATH, PREPROCESSOR_PATH]
         resolved_cal_file = str(metadata.get("resolved_calibration_model_file", "")).strip()
         if resolved_cal_file:
@@ -1480,7 +1821,7 @@ def main():
         else:
             st.warning("Command Center image not found at configured path.")
 
-        st.caption(f"Artifacts updated from notebook/build: {artifact_updated_text}")
+        st.caption(f"Artifacts on disk (reload picks up Jupyter exports): **{artifact_updated_text}**")
 
         st.markdown("#### Deployment Snapshot")
         s1, s2, s3, s4 = st.columns(4, gap="small")
@@ -1536,37 +1877,39 @@ def main():
         st.markdown("#### Decision Logic At A Glance")
         d1, d2, d3 = st.columns(3, gap="small")
         d1.markdown(
-            """
+            f"""
             <div class='kpi-card' style='min-height:108px;height:108px;'>
               <p class='kpi-label'><b>Calibrated Risk</b></p>
               <p style='margin:0;color:#d5e4ff;'>
-                Model outputs fraud probability <b>p</b> (0 to 1).<br>
-                Bands: <b>p &lt; 0.05</b>, <b>0.05 to &lt; 0.25</b>, <b>&gt;= 0.25</b>.
+                Model outputs fraud probability <b>p</b> (0–1) from <code>{escape(final_key)}</code>.<br>
+                Bands from <code>feature_metadata.json</code>:<br>
+                <b>p &lt; {review_t:.2f}</b> · <b>{review_t:.2f} ≤ p &lt; {block_t:.2f}</b> · <b>p ≥ {block_t:.2f}</b>
               </p>
             </div>
             """,
             unsafe_allow_html=True,
         )
         d2.markdown(
-            """
+            f"""
             <div class='kpi-card' style='min-height:108px;height:108px;'>
               <p class='kpi-label'><b>Chain-Aware Scoring</b></p>
               <p style='margin:0;color:#d5e4ff;'>
-                Checks linked <b>TRANSFER + CASH_OUT</b> behavior.<br>
-                If chain is active and <b>p &gt;= 0.05</b>, escalate to <b>RED</b>.
+                Uses <code>chain_size</code> / <code>is_chain_member</code> (TRANSFER + CASH_OUT logic).<br>
+                If bucket is not RED but chain is active and <b>p ≥ {moderate_t:.2f}</b>,
+                policy escalates to <b>RED</b> (same rule as <code>apply_triage_rule</code>).
               </p>
             </div>
             """,
             unsafe_allow_html=True,
         )
         d3.markdown(
-            """
+            f"""
             <div class='kpi-card' style='min-height:108px;height:108px;'>
               <p class='kpi-label'><b>Business Output</b></p>
               <p style='margin:0;color:#d5e4ff;'>
-                <b>GREEN</b>: p &lt; 5% (allow)<br>
-                <b>YELLOW</b>: 5% to &lt; 25% (review)<br>
-                <b>RED</b>: p &gt;= 25% or chain-escalated (block)
+                <b>GREEN</b>: p &lt; {review_t:.2f}<br>
+                <b>YELLOW</b>: {review_t:.2f} ≤ p &lt; {block_t:.2f}<br>
+                <b>RED</b>: p ≥ {block_t:.2f} or chain-escalated (≥ {moderate_t:.2f} on chain)
               </p>
             </div>
             """,
@@ -1828,7 +2171,7 @@ def main():
                     block_t = float(t["block_threshold"])
                     moderate_t = float(t["moderate_cutoff"])
                     p_cal = float(pred["calibrated_probability"])
-                    p_base = float(pred.get("base_rf_probability", 0.0))
+                    p_base = float(pred.get("base_probability") or pred.get("base_rf_probability") or 0.0)
                     is_chain = int(pred["is_chain_member"]) == 1
                     chain_escalated = (
                         str(pred["triage_bucket"]).upper() == "RED"
@@ -1839,7 +2182,13 @@ def main():
 
                     evidence_df = pd.DataFrame(
                         [
-                            {"item": "Tree baseline probability (rf_plain, SHAP)", "value": f"{p_base:.2%}"},
+                            {
+                                "item": (
+                                    f"Baseline probability (Tree SHAP, "
+                                    f"{metadata.get('tree_shap_backend_class', '?')})"
+                                ),
+                                "value": f"{p_base:.2%}",
+                            },
                             {"item": "Calibrated probability", "value": f"{p_cal:.2%}"},
                             {"item": "Review threshold", "value": f"{review_t:.0%}"},
                             {"item": "Block threshold", "value": f"{block_t:.0%}"},
@@ -2025,9 +2374,12 @@ def main():
         with st.expander("Technical notes", expanded=False):
             final_key = str(metadata.get("resolved_final_model_key", metadata.get("final_model_key", "unknown")))
             final_reason = str(metadata.get("final_model_reason", "n/a"))
+            _shap_cls_tn = str(metadata.get("tree_shap_backend_class", "?"))
+            _shap_ex = str(metadata.get("tree_shap_baseline_explainer_hint", ""))
             st.write(
-                f"Final deployed calibrator: `{final_key}` (from `feature_metadata.json`; "
-                "uncalibrated tree SHAP uses `rf_plain_base` when available)."
+                f"Final deployed calibrator: `{final_key}` (from `feature_metadata.json`). "
+                f"Tree SHAP runs on **`{_shap_cls_tn}`** when supported; see `tree_shap_baseline_explainer_hint` for details. "
+                f"Current hint: {_shap_ex}"
             )
             st.write(f"Selection reason: {final_reason}")
             st.json(metadata["triage_thresholds"])
@@ -2036,8 +2388,8 @@ def main():
                 "is not connected in this first app version."
             )
             st.write(
-                "Uses saved artifacts only (preprocessor + calibrator for `final_model_key` + "
-                "`rf_plain` base for SHAP). No retraining in app."
+                "Uses saved artifacts only (preprocessor + deploy calibrator; Tree SHAP uses the matched "
+                "baseline when supported). No retraining in app."
             )
 
     with batch_tab:
@@ -2161,8 +2513,7 @@ def main():
                 "from an upstream transaction-history/state pipeline."
             )
             st.write(
-                "Uses saved artifacts only (preprocessor + calibrator for `final_model_key` + "
-                "`rf_plain` base for SHAP). No retraining in app."
+                "Uses saved artifacts only (preprocessor + calibrator). No retraining in app."
             )
 
     with drift_tab:
@@ -2379,7 +2730,7 @@ def main():
             else:
                 psi_overall = "GREEN"
             max_psi = float(psi_df["psi"].max())
-            worst_row = psi_df.sort_values("psi", ascending=False).iloc[0]
+            top_psi_row = psi_df.sort_values("psi", ascending=False).iloc[0]
             st.markdown("**PSI drift — labels + numbers**")
             st.markdown(
                 "| Label | What it means (this app) |\n"
@@ -2389,18 +2740,19 @@ def main():
                 "| 🔴 **RED** | PSI **&gt; 0.20** — strong shift |\n"
             )
             st.caption(
-                "Each monitored feature gets one PSI value, then a label from the table above. "
-                "**Overall** = worst label across features (any 🔴 → overall RED)."
+                "**PSI rollup (pessimistic / max-severity):** assign each monitored covariate a PSI and GREEN/YELLOW/RED band; "
+                "**overall PSI status** = max-severity class across covariates (any 🔴 RED ⇒ rollup RED)."
             )
             o1, o2, o3, o4, o5 = st.columns(5)
             o1.metric("Overall", f"{_status_icon(psi_overall)} {psi_overall}")
-            o2.metric("Highest PSI (worst feature)", f"{max_psi:.4f}")
+            o2.metric("Peak PSI (argmax over features)", f"{max_psi:.4f}")
             o3.metric("🟢 GREEN count", n_green)
             o4.metric("🟡 YELLOW count", n_yellow)
             o5.metric("🔴 RED count", n_red)
             st.caption(
-                f"**Worst feature:** `{worst_row['feature']}` → PSI **{float(worst_row['psi']):.4f}** ({worst_row['status']}). "
-                "Full table below lists every feature."
+                f"**PSI hotspot (`argmax` PSI vs early/late cohorts):** `{top_psi_row['feature']}` → "
+                f"**{float(top_psi_row['psi']):.4f}** ({top_psi_row['status']}). "
+                "Covariate-level PSI breakdown is in the table below."
             )
 
             psi_show = psi_df.copy()
@@ -2457,7 +2809,10 @@ def main():
         mtime = MODEL_CARD_PATH.stat().st_mtime if MODEL_CARD_PATH.exists() else 0.0
         model_card_text = load_model_card_text(mtime)
         if model_card_text:
-            st.markdown(model_card_text, unsafe_allow_html=False)
+            st.markdown(
+                apply_live_metadata_to_model_card(model_card_text, metadata),
+                unsafe_allow_html=False,
+            )
         else:
             st.info(
                 "MODEL_CARD.md is missing. Add it to the project root to show the Model Card tab."

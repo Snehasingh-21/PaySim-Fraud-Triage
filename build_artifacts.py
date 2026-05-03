@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,85 @@ REVIEW_THRESHOLD = 0.40
 BLOCK_THRESHOLD = 0.60
 MODERATE_CUTOFF = REVIEW_THRESHOLD
 CHAIN_SIZE_CAP = 12
+
+# Optional: force deploy scorer in feature_metadata.json, e.g. catboost_plain_sigmoid (file must exist in artifacts/).
+PAYSIM_FINAL_MODEL_KEY_ENV = "PAYSIM_FINAL_MODEL_KEY"
+
+
+def _load_json_meta(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _merge_calibration_file_map(
+    prev: dict,
+    rf_entries: dict[str, str],
+) -> dict[str, str]:
+    """Keep notebook/export entries (CatBoost, XGB, …); overlay fresh RF paths."""
+    out = dict(prev.get("calibration_model_file_map") or {})
+    out.update(rf_entries)
+    return out
+
+
+def _merge_calibration_tables(
+    rf_df: pd.DataFrame,
+    prev: dict,
+) -> list[dict]:
+    rf_records = rf_df.to_dict(orient="records")
+    rf_names = {str(r.get("model", "")) for r in rf_records}
+    prev_rows = prev.get("calibration_comparison_table") or []
+    if not isinstance(prev_rows, list):
+        prev_rows = []
+    extras = [r for r in prev_rows if str(r.get("model", "")) not in rf_names]
+    return rf_records + extras
+
+
+def _pick_deploy_key(
+    *,
+    out_dir: Path,
+    merged_map: dict[str, str],
+    rf_key: str,
+    rf_reason: str,
+    prev: dict,
+) -> tuple[str, str]:
+    """Prefer env, then previous non-RF finalist if still on disk, else RF winner."""
+    candidates: list[str] = []
+    env_k = str(os.getenv(PAYSIM_FINAL_MODEL_KEY_ENV, "") or "").strip()
+    if env_k:
+        candidates.append(env_k)
+    prev_k = str(prev.get("final_model_key", "") or "").strip()
+    if prev_k and prev_k not in candidates:
+        candidates.append(prev_k)
+    if rf_key not in candidates:
+        candidates.append(rf_key)
+
+    for k in candidates:
+        if not k:
+            continue
+        fn = merged_map.get(k)
+        if not fn:
+            continue
+        if (out_dir / fn).is_file():
+            if k == rf_key:
+                return k, rf_reason
+            reason = str(prev.get("final_model_reason", "") or "").strip()
+            if not reason:
+                reason = (
+                    f"Deploy scorer `{k}` (calibrator on disk); RF family refreshed for SHAP / comparison."
+                )
+            if env_k == k:
+                suffix = f" (`{PAYSIM_FINAL_MODEL_KEY_ENV}` override)."
+            elif prev_k == k:
+                suffix = " (preserved finalist; re-run notebook §12.9c to refresh metrics rows)."
+            else:
+                suffix = " (first resolvable candidate on disk)."
+            return k, reason + suffix
+
+    return rf_key, rf_reason
 
 
 def add_row_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -125,8 +205,15 @@ def main() -> None:
     out_dir = root / "artifacts"
     out_dir.mkdir(exist_ok=True)
 
-    print(f"Loading dataset: {data_path}")
+    t0 = time.perf_counter()
+
+    def tick(phase: str) -> None:
+        print(f"[build_artifacts +{time.perf_counter() - t0:.1f}s] {phase}", flush=True)
+
+    tick(f"start — data: {data_path}")
+    print(f"Loading dataset: {data_path}", flush=True)
     df = pd.read_csv(data_path)
+    tick(f"read_csv done — rows={len(df):,}")
 
     target = "isFraud"
     drop_from_x = ["nameOrig", "nameDest", "isFlaggedFraud"]
@@ -142,6 +229,7 @@ def main() -> None:
     X_test = add_chain_features(X_test, chain_size_cap=CHAIN_SIZE_CAP)
     X_train = X_train.drop(columns=["amount"])
     X_test = X_test.drop(columns=["amount"])
+    tick("features + train/test split done")
 
     cat_features = ["type"]
     num_features = [c for c in X_train.columns if c not in cat_features]
@@ -158,6 +246,7 @@ def main() -> None:
     X_test_proc = np.asarray(X_test_proc, dtype=np.float64)
     X_train_proc = np.nan_to_num(np.clip(X_train_proc, -1e4, 1e4), nan=0.0, posinf=1e4, neginf=-1e4)
     X_test_proc = np.nan_to_num(np.clip(X_test_proc, -1e4, 1e4), nan=0.0, posinf=1e4, neginf=-1e4)
+    tick("preprocess fit/transform done")
 
     rf_plain = RandomForestClassifier(
         n_estimators=RF_N_ESTIMATORS,
@@ -168,6 +257,7 @@ def main() -> None:
         class_weight=None,
     )
     rf_plain.fit(X_train_proc, y_train)
+    tick("RandomForest fit done")
 
     # Build RF-family probability sources: uncalibrated + sigmoid + isotonic
     probs_by_model: dict[str, np.ndarray] = {
@@ -175,6 +265,7 @@ def main() -> None:
     }
     calibrators: dict[str, CalibratedClassifierCV] = {}
     for method in CALIBRATION_METHODS:
+        tick(f"calibration fit start (method={method}, cv={CALIBRATION_CV})")
         calibrator = CalibratedClassifierCV(
             estimator=rf_plain,
             method=method,
@@ -183,6 +274,7 @@ def main() -> None:
             ensemble=False,
         )
         calibrator.fit(X_train_proc, y_train)
+        tick(f"calibration fit done (method={method})")
         key = f"rf_plain_{method}"
         calibrators[key] = calibrator
         probs_by_model[key] = calibrator.predict_proba(X_test_proc)[:, 1]
@@ -206,58 +298,117 @@ def main() -> None:
         ["brier", "pr_auc", "roc_auc"], ascending=[True, False, False]
     ).reset_index(drop=True)
 
-    final_model_key, final_model_reason = select_final_rf_calibrated_model(calibration_comparison_table)
-    if final_model_key == "rf_plain_uncalibrated":
-        final_cal_model = rf_plain
+    rf_final_key, rf_final_reason = select_final_rf_calibrated_model(calibration_comparison_table)
+    if rf_final_key == "rf_plain_uncalibrated":
+        rf_cal_model = rf_plain
     else:
-        final_cal_model = calibrators[final_model_key]
+        rf_cal_model = calibrators[rf_final_key]
+
+    meta_path = out_dir / "feature_metadata.json"
+    prev = _load_json_meta(meta_path)
+    rf_map = {
+        "rf_plain_uncalibrated": "rf_plain_base.joblib",
+        "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
+        "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib",
+    }
+    merged_map = _merge_calibration_file_map(prev, rf_map)
+    deploy_key, deploy_reason = _pick_deploy_key(
+        out_dir=out_dir,
+        merged_map=merged_map,
+        rf_key=rf_final_key,
+        rf_reason=rf_final_reason,
+        prev=prev,
+    )
 
     joblib.dump(preprocessor, out_dir / "preprocessor_paysim.joblib")
     joblib.dump(rf_plain, out_dir / "rf_plain_base.joblib")
-    # Save individual calibrated RF variants and selected final calibrated model.
     if "rf_plain_sigmoid" in calibrators:
         joblib.dump(calibrators["rf_plain_sigmoid"], out_dir / "rf_plain_sigmoid_calibrated.joblib")
     if "rf_plain_isotonic" in calibrators:
         joblib.dump(calibrators["rf_plain_isotonic"], out_dir / "rf_plain_isotonic_calibrated.joblib")
-    joblib.dump(final_cal_model, out_dir / "rf_selected_calibrated.joblib")
+    if deploy_key == rf_final_key:
+        joblib.dump(rf_cal_model, out_dir / "rf_selected_calibrated.joblib")
+    else:
+        print(
+            f"NOTE: Not overwriting `rf_selected_calibrated.joblib` (deploy is `{deploy_key}`, not `{rf_final_key}`).",
+            flush=True,
+        )
 
-    metadata = {
+    default_triage = {
+        "operating_threshold": OPERATING_THRESHOLD,
+        "review_threshold": REVIEW_THRESHOLD,
+        "block_threshold": BLOCK_THRESHOLD,
+        "moderate_cutoff": MODERATE_CUTOFF,
+    }
+    if deploy_key == rf_final_key:
+        triage_thresholds = default_triage
+    else:
+        triage_thresholds = {**default_triage, **(prev.get("triage_thresholds") or {})}
+
+    combined_table = _merge_calibration_tables(calibration_comparison_table, prev)
+    selected_metrics: dict[str, str | float] | None = None
+    for row in combined_table:
+        if str(row.get("model", "")) == str(deploy_key):
+            selected_metrics = {
+                "model": deploy_key,
+                "brier": float(row["brier"]),
+                "pr_auc": float(row["pr_auc"]),
+                "roc_auc": float(row["roc_auc"]),
+            }
+            break
+
+    metadata: dict = {
         "input_feature_columns": list(X_train.columns),
         "processed_feature_names": list(preprocessor.get_feature_names_out()),
-        "triage_thresholds": {
-            "operating_threshold": OPERATING_THRESHOLD,
-            "review_threshold": REVIEW_THRESHOLD,
-            "block_threshold": BLOCK_THRESHOLD,
-            "moderate_cutoff": MODERATE_CUTOFF,
-        },
+        "triage_thresholds": {k: float(v) for k, v in triage_thresholds.items()},
         "chain_size_cap": CHAIN_SIZE_CAP,
-        "final_model_key": final_model_key,
-        "final_model_reason": final_model_reason,
-        "calibration_selection_rule": "lowest_brier_then_higher_pr_auc_then_higher_roc_auc_within_rf_family",
-        "calibration_comparison_table": calibration_comparison_table.to_dict(orient="records"),
-        "calibration_model_file_map": {
-            "rf_plain_uncalibrated": "rf_plain_base.joblib",
-            "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
-            "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib",
-        },
+        "final_model_key": deploy_key,
+        "final_model_reason": deploy_reason,
+        "calibration_selection_rule": (
+            "deploy_key: PAYSIM_FINAL_MODEL_KEY env, else prior finalist if joblib exists, else RF family; "
+            "rf_rows_refreshed_each_build_artifacts_run"
+        ),
+        "calibration_comparison_table": combined_table,
+        "calibration_model_file_map": merged_map,
         "notes": (
-            "Artifacts: RF base + dynamic RF-family calibrated deployment path; "
-            "chain features computed per split (train/test) to match notebook leakage-safe evaluation."
+            "RF base + calibrated RF variants refreshed by build_artifacts.py; "
+            "`final_model_key` may point at CatBoost/XGB joblibs from a prior notebook export. "
+            "Override deploy with PAYSIM_FINAL_MODEL_KEY."
         ),
     }
-    (out_dir / "feature_metadata.json").write_text(json.dumps(metadata, indent=2))
+    if selected_metrics is not None:
+        metadata["selected_calibration_metrics_test"] = selected_metrics
+    if deploy_key != rf_final_key:
+        metadata["exported_from_notebook"] = bool(prev.get("exported_from_notebook"))
+        for copy_key in (
+            "rf_family_calibration_comparison_table",
+            "triage_snapshot",
+            "bootstrap_prauc_snapshot",
+            "cost_sensitive_policy",
+        ):
+            if copy_key in prev:
+                metadata[copy_key] = prev[copy_key]
+    else:
+        metadata["exported_from_notebook"] = False
 
-    print("Saved artifacts:")
+    meta_path.write_text(json.dumps(metadata, indent=2))
+
+    tick("feature_metadata.json merged + joblibs")
+
+    print("Saved artifacts:", flush=True)
     print(f"- {out_dir / 'preprocessor_paysim.joblib'}")
     print(f"- {out_dir / 'rf_plain_base.joblib'}")
     if (out_dir / "rf_plain_sigmoid_calibrated.joblib").exists():
         print(f"- {out_dir / 'rf_plain_sigmoid_calibrated.joblib'}")
     if (out_dir / "rf_plain_isotonic_calibrated.joblib").exists():
         print(f"- {out_dir / 'rf_plain_isotonic_calibrated.joblib'}")
-    print(f"- {out_dir / 'rf_selected_calibrated.joblib'}")
-    print(f"Selected final model key: {final_model_key}")
-    print(f"Selection reason: {final_model_reason}")
-    print(f"- {out_dir / 'feature_metadata.json'}")
+    if deploy_key == rf_final_key:
+        print(f"- {out_dir / 'rf_selected_calibrated.joblib'}")
+    print(f"RF family pick (SHAP baseline path): {rf_final_key}")
+    print(f"Streamlit deploy `final_model_key`: {deploy_key}")
+    print(f"Deploy reason: {deploy_reason}", flush=True)
+    print(f"- {out_dir / 'feature_metadata.json'}", flush=True)
+    tick("finished")
 
 
 if __name__ == "__main__":

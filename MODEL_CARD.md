@@ -47,11 +47,13 @@ In the **research notebook** and in **`build_artifacts.py`**, `chain_size` and `
 
 ## 6. Model
 
-**Fraud probability (triage):** the Streamlit app loads the **calibrated** pipeline named by **`final_model_key`** in `feature_metadata.json` (e.g. `catboost_plain_sigmoid` from a full notebook run, or `rf_plain_sigmoid` from `build_artifacts.py` only). This is the **operational** score for buckets and policy.
+**Fraud probability (triage):** the Streamlit app loads the **calibrated** scorer keyed by **`final_model_key`** in `feature_metadata.json` (via **`calibration_model_file_map`**). The usual flagship path is **`01_eda_paysim.ipynb` §12.9b**, which selects a finalist (often **`catboost_plain_sigmoid`**) from the calibrated comparison table—**that object is what drives buckets and policy.**
 
-**Local SHAP in the app:** feature attributions still come from a **tree** baseline saved as **`rf_plain_base.joblib`** (`TreeExplainer`). That baseline can differ from **`final_model_key`** when the notebook selects a non-RF finalist — same split-safe design as the research notebook.
+**Refreshing without the notebook (`build_artifacts.py`):** the script retrains/refreshes the **RF-family** preprocessor and joblibs (`rf_plain_base.joblib`, sigmoid/isotonic RF calibrators, merged calibration table rows). It **does not automatically switch deploy to RF**: **`final_model_key` is chosen** after **`PAYSIM_FINAL_MODEL_KEY`** (if set), otherwise **prior finalist** if its calibrator file still exists under `artifacts/`, otherwise the **RF** pick that `build_artifacts` just produced. So you only end on **`rf_plain_sigmoid`** when there is **no surviving non-RF scorer on disk** (or when you explicitly set the env var).
 
-**Notebook-only training:** many families are compared (LR, RF, boosting, CatBoost, etc.); calibration picks **`FINAL_MODEL_KEY`** among finalists. **`build_artifacts.py`** is an RF-only fallback that writes RF calibration rows and sets **`final_model_key`** inside the RF family.
+**Local SHAP in the app:** feature attributions come from **`rf_plain_base.joblib`** (`TreeExplainer`). That baseline can differ from **`final_model_key`** when the deploy scorer is CatBoost/XGB—same separation as in the notebook.
+
+**Notebook training breadth:** Section **12** compares LR, RF, boosting, CatBoost, etc.; export picks **`FINAL_MODEL_KEY`** and the matching deploy calibrator. **`build_artifacts.py`** refreshes RF-family joblibs and **merges** calibration tables against prior **`feature_metadata.json`**—**deploy can stay CatBoost/XGB** when those calibrator files are still present under `artifacts/`.
 
 ## 7. Decision policy (cost-sensitive triage)
 The final action is derived from calibrated probability and the chain escalation rule.
@@ -80,18 +82,18 @@ Chain escalation rule:
 ## 8. Evaluation and evidence
 ### Key metrics (deployed model) + supporting evidence
 
-Values below reflect **the same notebook run** that exported `feature_metadata.json` (selected scorer: **`catboost_plain_sigmoid`**).
+Values below mirror **`artifacts/feature_metadata.json`** saved by the **`01_eda_paysim.ipynb` §12.9b export** (selected scorer: **`catboost_plain_sigmoid`**) and match the printable notebook / exported PDF narrative for calibration and bootstrap.
 
 | Metric | Value |
 |--------|-------|
-| PR-AUC (test, calibrated deploy model) | 0.998554 |
-| Brier Score | 3.143698e-06 |
-| ROC-AUC | 0.999905 |
+| PR-AUC (test, calibrated deploy model) | 0.9985543777615832 |
+| Brier Score | 3.1436978686657607e-06 |
+| ROC-AUC | 0.999905408255468 |
 | Fraud captured in RED (before → after escalation) | 99.76% → 99.76% |
 | Legitimate allowed (GREEN) | 100.000% |
-| Logistic Regression ΔPR-AUC (chain vs no-chain; notebook §12.5) | +0.010 |
+| Logistic Regression ΔPR-AUC (chain − no-chain; **`logreg_plain`**, notebook §12.5) | **+0.0104** |
 
-**Bootstrap PR-AUC (95% CI, notebook §12.9a):**
+**Bootstrap PR-AUC (95% CI, notebook §12.9a, same `FINAL_MODEL_KEY`):**
 
 | Statistic | Value |
 |----------|-------|
@@ -104,20 +106,6 @@ Values below reflect **the same notebook run** that exported `feature_metadata.j
 ### Model comparison context (notebook evidence, not deployment)
 
 The notebook compares **multiple families** (including boosting, **CatBoost**, **Balanced RF**, **Gaussian NB**, etc.) under the same chain-aware pipeline. The **deployed** scorer is whatever **`final_model_key`** + **`calibration_model_file_map`** reference after export — **not** a fixed legacy RF path unless that key wins or you used **`build_artifacts.py`** alone.
-
-### Bootstrap uncertainty for PR-AUC (95% CI)
-
-The notebook computes a **bootstrap 95% confidence interval** for the deployed scorer’s **PR-AUC** on the *untouched test set* (Section `12.9a`), keyed to **`FINAL_MODEL_KEY`** for that run. The rows below are a **legacy PDF snapshot** (isotonic-aligned export before dynamic selection emphasized sigmoid here); rerun §12.9a after your current `FINAL_MODEL_KEY` and replace this table—or omit until refreshed.
-
-| Statistic | Value (legacy snapshot; refresh after rerun) |
-|----------|-------|
-| PR-AUC point estimate | 0.998239 |
-| Bootstrap mean PR-AUC | 0.998200 |
-| 95% CI lower bound | 0.996213 |
-| 95% CI upper bound | 0.999633 |
-| Valid bootstrap runs used | 300 / 300 |
-
-**Optional (from your screenshot):** if you want the CI numbers/table as an image, place your histogram/table image into `assets/` and embed it only when the file is present (to avoid broken placeholders in the app view).
 
 ### Evidence in the notebook
 
@@ -163,11 +151,11 @@ The Streamlit “Drift Monitor” tab implements monitoring-only behavior (no re
 - Calibration and thresholds are tuned for this repository's pipeline and should be revalidated if the data pipeline changes.
 
 ## 12. Versioning / artifacts
-The deployed artifacts are loaded from `artifacts/`:
-- preprocessor
-- RF base model
-- calibrated model (path from `calibration_model_file_map` for `final_model_key`)
-- feature metadata (thresholds and feature names)
+The Streamlit app loads from `artifacts/`:
+- **Preprocessor** — `preprocessor_paysim.joblib` (column order + encoding from the training pipeline).
+- **Tree baseline for SHAP** — `rf_plain_base.joblib` (plain RF; `TreeExplainer` uses this when the deploy model is not an RF or when the calibrator is not tree-SHAP-friendly). This is **not** the same file as the **production fraud score** when `final_model_key` is CatBoost/XGB.
+- **Deploy scorer (calibrated)** — whatever file `calibration_model_file_map[final_model_key]` points to (e.g. `catboost_plain_sigmoid_calibrated.joblib` for the current notebook-led export). This is what produces **probability + triage buckets** in the app.
+- **Feature metadata** — `feature_metadata.json` (thresholds, feature names, `final_model_key`, calibration table, optional bootstrap/triage snapshots).
 
 If you rebuild artifacts using `build_artifacts.py`, the Streamlit app should remain consistent because it reads thresholds and feature mappings from `feature_metadata.json`.
 
