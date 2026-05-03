@@ -40,39 +40,123 @@
     "cat__type_TRANSFER"
   ],
   "triage_thresholds": {
-    "operating_threshold": 0.5,
-    "review_threshold": 0.4,
-    "block_threshold": 0.6,
-    "moderate_cutoff": 0.4
+    "operating_threshold": 0.05,
+    "review_threshold": 0.05,
+    "block_threshold": 0.15,
+    "moderate_cutoff": 0.05
   },
   "chain_size_cap": 12,
-  "final_model_key": "rf_plain_sigmoid",
-  "final_model_reason": "Selected rf_plain_sigmoid dynamically within RF family using lowest Brier (tol=1e-07), then highest PR-AUC, then highest ROC-AUC. Values => Brier=0.00000328, PR-AUC=0.998508, ROC-AUC=0.999645.",
-  "calibration_selection_rule": "lowest_brier_then_higher_pr_auc_then_higher_roc_auc_within_rf_family",
+  "final_model_key": "catboost_plain_sigmoid",
+  "final_model_reason": "Selected catboost_plain_sigmoid dynamically across finalists using lowest Brier (tol=1e-07), then highest PR-AUC, then highest ROC-AUC.",
+  "calibration_selection_rule": "lowest_brier_then_higher_pr_auc_then_higher_roc_auc; rf_preferred_when_enabled",
   "calibration_comparison_table": [
     {
-      "model": "rf_plain_sigmoid",
-      "brier": 3.276362509279825e-06,
-      "pr_auc": 0.9985080292924411,
-      "roc_auc": 0.9996450794549318
+      "model": "catboost_plain_uncalibrated",
+      "brier": 3.2613412034935878e-06,
+      "roc_auc": 0.999905408255468,
+      "pr_auc": 0.9985543777615832
     },
     {
-      "model": "rf_plain_isotonic",
-      "brier": 3.33893503246502e-06,
-      "pr_auc": 0.9982389037531602,
-      "roc_auc": 0.9996456881546493
+      "model": "catboost_plain_sigmoid",
+      "brier": 3.1436978686657607e-06,
+      "roc_auc": 0.999905408255468,
+      "pr_auc": 0.9985543777615832
+    },
+    {
+      "model": "catboost_plain_isotonic",
+      "brier": 3.1873282250711823e-06,
+      "roc_auc": 0.9998506125896726,
+      "pr_auc": 0.9984474896916713
     },
     {
       "model": "rf_plain_uncalibrated",
-      "brier": 7.460453206561143e-06,
-      "pr_auc": 0.9985080292924411,
-      "roc_auc": 0.9996450794549316
+      "brier": 7.460453206561141e-06,
+      "roc_auc": 0.9996450794549316,
+      "pr_auc": 0.9985080292924411
+    },
+    {
+      "model": "rf_plain_sigmoid",
+      "brier": 3.276362509279825e-06,
+      "roc_auc": 0.9996450794549318,
+      "pr_auc": 0.9985080292924411
+    },
+    {
+      "model": "rf_plain_isotonic",
+      "brier": 3.337273000642194e-06,
+      "roc_auc": 0.9996456881546493,
+      "pr_auc": 0.9982389037531602
+    },
+    {
+      "model": "xgb_plain_uncalibrated",
+      "brier": 1.427683479011992e-05,
+      "roc_auc": 0.99875386620283,
+      "pr_auc": 0.9936526229858795
+    },
+    {
+      "model": "xgb_plain_sigmoid",
+      "brier": 1.4860635188043182e-05,
+      "roc_auc": 0.99875386620283,
+      "pr_auc": 0.9936526229858796
+    },
+    {
+      "model": "xgb_plain_isotonic",
+      "brier": 1.4396795172740217e-05,
+      "roc_auc": 0.9982996387652611,
+      "pr_auc": 0.9931115004887806
+    }
+  ],
+  "rf_family_calibration_comparison_table": [
+    {
+      "model": "rf_plain_uncalibrated",
+      "brier": 7.460453206561141e-06,
+      "roc_auc": 0.9996450794549316,
+      "pr_auc": 0.9985080292924411
+    },
+    {
+      "model": "rf_plain_sigmoid",
+      "brier": 3.276362509279825e-06,
+      "roc_auc": 0.9996450794549318,
+      "pr_auc": 0.9985080292924411
+    },
+    {
+      "model": "rf_plain_isotonic",
+      "brier": 3.337273000642194e-06,
+      "roc_auc": 0.9996456881546493,
+      "pr_auc": 0.9982389037531602
     }
   ],
   "calibration_model_file_map": {
     "rf_plain_uncalibrated": "rf_plain_base.joblib",
     "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
-    "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib"
+    "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib",
+    "catboost_plain_sigmoid": "catboost_plain_sigmoid_calibrated.joblib",
+    "catboost_plain_isotonic": "catboost_plain_isotonic_calibrated.joblib",
+    "xgb_plain_sigmoid": "xgb_plain_sigmoid_calibrated.joblib",
+    "xgb_plain_isotonic": "xgb_plain_isotonic_calibrated.joblib"
   },
-  "notes": "Artifacts: RF base + dynamic RF-family calibrated deployment path; chain features computed per split (train/test) to match notebook leakage-safe evaluation."
+  "cost_sensitive_policy": {
+    "cost_fp": 5,
+    "cost_fn": 500
+  },
+  "exported_from_notebook": true,
+  "notes": "Artifacts synced from Jupyter notebook session; preprocessor, SHAP baseline (rf_plain_base.joblib), selected calibrated scorer, and triage thresholds match the notebook evaluation run.",
+  "triage_snapshot": {
+    "fraud_capture_in_red_after_pct": 99.75654290931223,
+    "fraud_capture_in_red_before_pct": 99.75654290931223,
+    "legitimate_in_green_pct": 100.0
+  },
+  "bootstrap_prauc_snapshot": {
+    "pr_auc_point": 0.9985543777615832,
+    "pr_auc_bootstrap_mean": 0.9985199532798703,
+    "ci_lower": 0.996327499809248,
+    "ci_upper": 0.9999501386694014,
+    "valid_runs": 300,
+    "n_boot_requested": 300
+  },
+  "selected_calibration_metrics_test": {
+    "model": "catboost_plain_sigmoid",
+    "brier": 3.1436978686657607e-06,
+    "pr_auc": 0.9985543777615832,
+    "roc_auc": 0.999905408255468
+  }
 }

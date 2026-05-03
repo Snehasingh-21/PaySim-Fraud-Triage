@@ -4,7 +4,7 @@
 
 ![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)
 
-*Proposed solution overview: PaySim → EDA → stratified split → split-safe chain discovery & features → preprocessing → model comparison → RF (chain-aware) + calibration → triage; plus validation (SHAP/LIME, bootstrap CI, error analysis, drift/PSI) and Streamlit deployment.*
+*Proposed solution overview: PaySim → EDA → stratified split → split-safe chain discovery & features → preprocessing → model comparison → **calibration** (reference export: **`catboost_plain_sigmoid`**) → triage; plus validation (SHAP/LIME, bootstrap CI, error analysis, drift/PSI) and Streamlit deployment.*
 
 ---
 
@@ -27,7 +27,7 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
    In `01_eda_paysim.ipynb` (**§12**), we train and evaluate the same model families **with** and **without** chain columns, producing an explicit **`*_no_chain` vs `*_chain`** comparison table (e.g. PR-AUC, recall). That supports the claim that chain features **help** under the same split and preprocessing, rather than ad-hoc tuning.
 
 3. **Calibration + triage, not raw scores**  
-   Tree ensembles can be **poorly calibrated**. In the notebook, we compare RF calibration variants (`rf_plain_uncalibrated`, `rf_plain_sigmoid`, `rf_plain_isotonic`) and select the final deployed calibration path **dynamically within the RF family** using Brier-first ranking with PR-AUC/ROC-AUC tie-breaks. The Streamlit app uses calibrated probabilities for **GREEN / YELLOW / RED** buckets with thresholds from artifact metadata.
+   Boosted/tree models can be **poorly calibrated**. The notebook calibrates **finalists** (RF, CatBoost, XGBoost, …). In the **documented full run**, **`catboost_plain_sigmoid`** (calibrated CatBoost) wins; **`FINAL_MODEL_KEY`** always records whichever finalist actually wins your run. The notebook exports **`artifacts/feature_metadata.json`**, and the app scores with that **calibrated** pipeline. **`build_artifacts.py`** alone stays within **RF** calibration variants for a lightweight fallback. Thresholds for **GREEN / YELLOW / RED** come from exported metadata.
 
 4. **Cost-aware policy transparency**  
    The UI surfaces a simple cost model (**false-positive cost = 5**, **false-negative cost = 500**) so reviewers see that thresholds reflect **business asymmetry**, not arbitrary cutoffs.
@@ -45,9 +45,9 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 | **Preprocessing** | `ColumnTransformer`: `StandardScaler` on numeric, `OneHotEncoder(handle_unknown="ignore")` on `type` | Linearly sensitive models need scaling; trees still receive consistent numeric inputs; unknown categories at inference. |
 | **Engineered numeric features** | `orig_delta`, `dest_delta`, `orig_residual`, zero-balance flags, `log_amount` | Captures balance consistency and scale skew; documented in EDA. |
 | **Chain features** | Groupby `(step, amount)` + TRANSFER ∧ CASH_OUT + cap | Domain pattern; cap limits noise from massive groups. |
-| **Models compared** | Logistic Regression, Random Forest, XGBoost, LightGBM (notebook) | Baseline linear, strong non-linear ensemble, and two gradient boosting benchmarks. |
-| **Final scorer (app + `build_artifacts.py`)** | Random Forest + **dynamic RF-family calibration** (`FINAL_MODEL_KEY` in notebook) | Keeps base family fixed to RF while allowing run-specific calibrated-path selection for operations. |
-| **Triage** | Operating 0.50; review ≥ 0.40; block ≥ 0.60; chain escalation for moderate scores | Three-way policy; chain members near **moderate** risk can be escalated (see `app.py` / notebook). |
+| **Models compared** | LR, RF, XGBoost, LightGBM, CatBoost (optional), BRF, GNB, … (notebook §12) | Same chain-aware pipeline; finalists vary by run. |
+| **Final scorer** | **Reference export:** **`catboost_plain_sigmoid`** (calibrated CatBoost) via **`final_model_key`** + **`calibration_model_file_map`**. Optional **`build_artifacts.py`**: RF-family calibration only. | App loads metadata-driven scorer; SHAP baseline stays **`rf_plain`** unless you change artifacts. |
+| **Triage** | Three-way **GREEN / YELLOW / RED** from exported thresholds (`review_threshold`, `block_threshold`, `moderate_cutoff` in `feature_metadata.json`) | Values depend on your notebook §12.9b run; chain escalation rule matches that export. |
 
 ### Additional methods added for robustness / clarity
 
@@ -83,7 +83,7 @@ If enabled in Streamlit, the LLM is used only as an **analyst-style explanation 
 
 Pipeline placement:
 
-`transaction input -> preprocessing -> RF + selected calibration -> fraud probability -> triage bucket -> SHAP / reasons -> LLM analyst summary`
+`transaction input → preprocessing → calibrated CatBoost (`catboost_plain_sigmoid` in the reference export; otherwise whatever `final_model_key` names in metadata) → fraud probability → triage bucket → SHAP (tree baseline on `rf_plain_base`) / reasons → optional LLM analyst summary`
 
 This keeps the LLM strictly in the explanation layer; it does not change model training, calibration, thresholds, or triage decisions.
 
@@ -132,7 +132,7 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 |------|--------|
 | Language | Python 3 |
 | Analysis | Jupyter, pandas, numpy |
-| ML | scikit-learn, joblib; notebook also uses **imbalanced-learn (SMOTE)** where configured, **XGBoost**, **LightGBM**, **SHAP**, plotting libraries |
+| ML | scikit-learn, joblib; notebook also uses **imbalanced-learn (SMOTE)** where configured, **XGBoost**, **LightGBM**, **CatBoost** (optional), **SHAP**, plotting libraries |
 | App | Streamlit |
 | Data | PaySim CSV (`PS_20174392719_1491204439457_log.csv`) — **gitignored by default** (large) |
 
@@ -147,7 +147,7 @@ pip install -r requirements.txt
 **Notebook extras (install as needed — LIME is notebook-only):**
 
 ```bash
-pip install jupyter matplotlib seaborn imbalanced-learn xgboost lightgbm lime
+pip install jupyter matplotlib seaborn imbalanced-learn xgboost lightgbm catboost lime
 ```
 
 ---
@@ -161,7 +161,7 @@ Group_Project/
 ├── .gitignore
 ├── app.py
 ├── build_artifacts.py
-├── artifacts/                 # after build: preprocessor, RF, calibrator, metadata
+├── artifacts/                 # preprocessor, base RF for SHAP, calibrated joblib(s), feature_metadata.json (see below)
 ├── assets/                    # banner SVG + README screenshots
 ├── 01_eda_paysim.ipynb
 ├── MODEL_CARD.md
@@ -185,6 +185,22 @@ Place **`PS_20174392719_1491204439457_log.csv`** in the project root (see [PaySi
 python build_artifacts.py
 streamlit run app.py
 ```
+
+### Streamlit, artifacts, and “dynamic” scoring
+
+`app.py` **does not train** models. It loads:
+
+- **`artifacts/preprocessor_paysim.joblib`** — same transforms as the notebook.
+- **`artifacts/feature_metadata.json`** — **`final_model_key`** plus **`calibration_model_file_map`**. The **checked-in reference export** uses **`catboost_plain_sigmoid`** → `catboost_plain_sigmoid_calibrated.joblib`; another rerun may list XGBoost or RF variants instead.
+- **The calibrated pipeline** file named by that map — this is the **fraud probability** used for triage on Dashboard, Batch, and Drift Monitor.
+- **`artifacts/rf_plain_base.joblib`** — **only** for **SHAP** / “tree baseline” probability in the UI; it may differ from **`final_model_key`** when the notebook picks a non-RF finalist.
+
+**Two ways to populate `artifacts/`**
+
+1. **Recommended (full notebook zoo):** run **`01_eda_paysim.ipynb`** through **§12.9b** and execute the **artifact export** cell (writes `feature_metadata.json`, all relevant `*_calibrated.joblib` files, and keeps maps aligned with CatBoost / XGB / RF).
+2. **Quick RF-only fallback:** run **`python build_artifacts.py`** — trains RF + RF calibration variants only; fine for a fast demo, **not** a drop-in replacement for a CatBoost-led notebook export.
+
+**Auto-rebuild on Streamlit start** (`AUTO_REBUILD_IF_STALE`, default on): if the **notebook file** is newer than artifact mtimes, the app runs **`build_artifacts.py`** only — it does **not** execute Jupyter. After a real modeling change, **export from the notebook** (or run `build_artifacts.py` intentionally) so `feature_metadata.json` matches the models you care about.
 
 ---
 

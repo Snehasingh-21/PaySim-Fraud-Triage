@@ -25,22 +25,45 @@ except Exception:
     pass
 
 
-ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
+_APP_ROOT = Path(__file__).resolve().parent
+ARTIFACT_DIR = _APP_ROOT / "artifacts"
 PREPROCESSOR_PATH = ARTIFACT_DIR / "preprocessor_paysim.joblib"
 BASE_MODEL_PATH = ARTIFACT_DIR / "rf_plain_base.joblib"
 META_PATH = ARTIFACT_DIR / "feature_metadata.json"
-HEADER_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "fraud_triage_header.svg"
-TITLE_ICON_PATH = Path(__file__).resolve().parent / "assets" / "title_calibration_icon.png"
-COMMAND_CENTER_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "command_center_heroic_local.svg"
-DATA_PATH = Path(__file__).resolve().parent / "PS_20174392719_1491204439457_log.csv"
-MODEL_CARD_PATH = Path(__file__).resolve().parent / "MODEL_CARD.md"
+HEADER_IMAGE_PATH = _APP_ROOT / "assets" / "fraud_triage_header.svg"
+TITLE_ICON_PATH = _APP_ROOT / "assets" / "title_calibration_icon.png"
+COMMAND_CENTER_IMAGE_PATH = _APP_ROOT / "assets" / "command_center_heroic_local.svg"
+MODEL_CARD_PATH = _APP_ROOT / "MODEL_CARD.md"
 COST_FP = 5
 COST_FN = 500
 # Bump when the analyst prompt changes so cached summaries are not reused across app versions.
 OLLAMA_ANALYST_PROMPT_VERSION = 5
-BUILD_SCRIPT_PATH = Path(__file__).resolve().parent / "build_artifacts.py"
-NOTEBOOK_PATH = Path(__file__).resolve().parent / "01_eda_paysim.ipynb"
+BUILD_SCRIPT_PATH = _APP_ROOT / "build_artifacts.py"
 AUTO_REBUILD_TIMEOUT_SEC = int(os.getenv("AUTO_REBUILD_TIMEOUT_SEC", "1800"))
+
+
+def _resolve_paysim_csv() -> Path:
+    """Default CSV next to app; override with PAYSIM_CSV or PAYSIM_DATA_PATH (abs or relative to app)."""
+    for key in ("PAYSIM_CSV", "PAYSIM_DATA_PATH"):
+        raw = os.getenv(key)
+        if raw:
+            p = Path(raw).expanduser()
+            return p.resolve() if p.is_absolute() else (_APP_ROOT / p).resolve()
+    name = os.getenv("PAYSIM_CSV_NAME", "PS_20174392719_1491204439457_log.csv")
+    return (_APP_ROOT / name).resolve()
+
+
+def _resolve_notebook_path() -> Path:
+    """Notebook that drives auto-rebuild staleness; override with PAYSIM_NOTEBOOK."""
+    raw = os.getenv("PAYSIM_NOTEBOOK")
+    if raw:
+        p = Path(raw).expanduser()
+        return p.resolve() if p.is_absolute() else (_APP_ROOT / p).resolve()
+    return (_APP_ROOT / "01_eda_paysim.ipynb").resolve()
+
+
+DATA_PATH = _resolve_paysim_csv()
+NOTEBOOK_PATH = _resolve_notebook_path()
 
 
 def _env_flag(name: str, default: str = "1") -> bool:
@@ -58,16 +81,26 @@ def _latest_mtime(paths: list[Path]) -> float:
 
 
 def _artifacts_stale() -> bool:
+    """
+    True when saved artifacts are older than the EDA notebook.
+
+    Only the notebook timestamp drives auto-rebuild (not build_artifacts.py), so editing
+    the build script alone does not force a long rebuild on Streamlit start—only saving
+    the notebook after real modeling changes does.
+    """
     artifact_paths = [META_PATH, PREPROCESSOR_PATH, BASE_MODEL_PATH]
     artifact_paths.extend(sorted(ARTIFACT_DIR.glob("*.joblib")))
-    source_paths = [BUILD_SCRIPT_PATH, NOTEBOOK_PATH]
-    return _latest_mtime(source_paths) > _latest_mtime(artifact_paths)
+    if not NOTEBOOK_PATH.exists():
+        return False
+    return _latest_mtime([NOTEBOOK_PATH]) > _latest_mtime(artifact_paths)
 
 
 def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
     """
     Rebuild artifacts only when missing/stale, and only when explicitly enabled.
     Safe behavior:
+    - Stale = notebook (default `01_eda_paysim.ipynb`, or `PAYSIM_NOTEBOOK`) newer than artifacts
+      — not `build_artifacts.py` alone.
     - If data CSV is missing, skip auto-rebuild quietly (existing artifacts still load).
     - If rebuild fails, surface error details to help local debugging.
     """
@@ -88,7 +121,7 @@ def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
 
     result = subprocess.run(
         [sys.executable, str(BUILD_SCRIPT_PATH)],
-        cwd=str(Path(__file__).resolve().parent),
+        cwd=str(_APP_ROOT),
         capture_output=True,
         text=True,
         timeout=AUTO_REBUILD_TIMEOUT_SEC,
@@ -120,20 +153,44 @@ def load_artifacts(artifact_cache_key: str):
     base_model = joblib.load(BASE_MODEL_PATH)
     metadata = json.loads(META_PATH.read_text())
 
-    model_file_map = metadata.get(
-        "calibration_model_file_map",
-        {
-            "rf_plain_uncalibrated": "rf_plain_base.joblib",
-            "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
-            "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib",
-        },
-    )
-    final_model_key = str(metadata.get("final_model_key", "rf_plain_sigmoid"))
-    cal_model_file = model_file_map.get(final_model_key, "rf_selected_calibrated.joblib")
+    # Defaults cover build_artifacts.py / minimal exports; notebook JSON adds CatBoost, XGBoost, etc.
+    _default_cal_map = {
+        "rf_plain_uncalibrated": "rf_plain_base.joblib",
+        "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
+        "rf_plain_isotonic": "rf_plain_isotonic_calibrated.joblib",
+    }
+    _meta_map = metadata.get("calibration_model_file_map") or {}
+    model_file_map = {**_default_cal_map, **_meta_map}
+
+    final_model_key = str(metadata.get("final_model_key", "")).strip()
+
+    if final_model_key:
+        cal_model_file = model_file_map.get(final_model_key)
+        if not cal_model_file:
+            raise FileNotFoundError(
+                f"`final_model_key`={final_model_key!r} is not listed in `calibration_model_file_map`. "
+                "Re-export artifacts from the notebook so RF / XGB / CatBoost rows map to files on disk."
+            )
+    else:
+        # Older/minimal exports: try canonical alias files (notebook + build_artifacts both may write these).
+        cal_model_file = None
+        if (ARTIFACT_DIR / "rf_selected_calibrated.joblib").exists():
+            cal_model_file = "rf_selected_calibrated.joblib"
+            final_model_key = "rf_selected_calibrated"
+        elif (ARTIFACT_DIR / "rf_plain_sigmoid_calibrated.joblib").exists():
+            cal_model_file = "rf_plain_sigmoid_calibrated.joblib"
+            final_model_key = "rf_plain_sigmoid"
+        else:
+            raise FileNotFoundError(
+                "artifacts/feature_metadata.json has empty `final_model_key` and no "
+                "`rf_selected_calibrated.joblib` / `rf_plain_sigmoid_calibrated.joblib` fallback found."
+            )
+
     cal_model_path = ARTIFACT_DIR / cal_model_file
     if not cal_model_path.exists():
         raise FileNotFoundError(
-            f"Selected calibrated model file missing: `{cal_model_path}` for final_model_key `{final_model_key}`."
+            f"Calibrated model file missing: `{cal_model_path}` for `final_model_key={final_model_key}`. "
+            "Ensure the matching joblib exists next to feature_metadata.json."
         )
     cal_model = joblib.load(cal_model_path)
     metadata["resolved_calibration_model_file"] = cal_model_file
@@ -836,11 +893,20 @@ def run_inference(
     return out
 
 
+def drift_csv_cache_key() -> str:
+    """Invalidate drift loader when path or file contents (mtime) change."""
+    p = DATA_PATH
+    if not p.exists():
+        return f"{p}:missing"
+    return f"{p}:{p.stat().st_mtime_ns}"
+
+
 @st.cache_data(show_spinner=False)
-def load_drift_source_df() -> pd.DataFrame:
+def load_drift_source_df(_csv_cache_key: str) -> pd.DataFrame:
     if not DATA_PATH.exists():
         raise FileNotFoundError(
-            f"Dataset not found at `{DATA_PATH}`. Place the PaySim CSV in project root to enable Drift Monitor."
+            f"Dataset not found at `{DATA_PATH}`. "
+            "Place the PaySim CSV in the project root or set `PAYSIM_CSV` / `PAYSIM_DATA_PATH`."
         )
     use_cols = [
         "step",
@@ -1337,7 +1403,7 @@ def main():
         st.markdown(
             f"""
             <h1 style="margin:0;display:flex;align-items:center;gap:16px;font-weight:900;">
-              <span>PaySim Fraud Triage App (RF + Selected Calibration)</span>
+              <span>PaySim Fraud Triage — calibrated scoring</span>
               <img src="data:image/png;base64,{title_icon_b64}" alt="Calibration icon"
                    style="height:70px;width:auto;display:inline-block;vertical-align:middle;" />
             </h1>
@@ -1345,8 +1411,15 @@ def main():
             unsafe_allow_html=True,
         )
     else:
-        st.title("PaySim Fraud Triage App (RF + Selected Calibration)")
+        st.title("PaySim Fraud Triage — calibrated scoring")
     st.caption("Fast demo for fraud triage decisions using the final calibrated model.")
+    _dyn_bits = []
+    if os.getenv("PAYSIM_CSV") or os.getenv("PAYSIM_DATA_PATH") or os.getenv("PAYSIM_CSV_NAME"):
+        _dyn_bits.append(f"**Data:** `{DATA_PATH}`")
+    if os.getenv("PAYSIM_NOTEBOOK"):
+        _dyn_bits.append(f"**Notebook (stale check):** `{NOTEBOOK_PATH}`")
+    if _dyn_bits:
+        st.caption(" · ".join(_dyn_bits))
 
     try:
         will_auto_rebuild = (
@@ -1373,6 +1446,13 @@ def main():
     except Exception as e:
         st.error(str(e))
         st.stop()
+
+    _fk_live = str(metadata.get("resolved_final_model_key", metadata.get("final_model_key", ""))).strip()
+    if _fk_live:
+        st.caption(
+            f"Loaded deploy calibrator: `{escape(_fk_live)}` "
+            "(from `artifacts/feature_metadata.json`). Local SHAP uses `rf_plain_base.joblib`."
+        )
 
     overview_tab, dashboard_tab, batch_tab, drift_tab, model_card_tab = st.tabs(
         ["Command Center", "Dashboard", "Batch upload", "Drift Monitor", "Model Card"]
@@ -1535,11 +1615,12 @@ def main():
         kpi_accent = "#2f3c52" if saved is None else bucket_meta(current_bucket)["color"]
 
         s1, s2, s3 = st.columns(3)
+        _fk_esc = escape(str(_final_key))
         s1.markdown(
-            """
+            f"""
             <div class="kpi-card" style="border-color:#3d5a86;box-shadow:0 0 0 1px rgba(79,155,255,0.12) inset;">
-              <p class="kpi-label">Model</p>
-              <p class="kpi-value">RF + Selected Calibration</p>
+              <p class="kpi-label">Deploy calibrator</p>
+              <p class="kpi-value">{_fk_esc}</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1693,7 +1774,7 @@ def main():
                     <div style="padding:14px;border-radius:12px;border:1px solid #333;background:#161616;min-height:184px;border-top:6px solid {meta['color']};">
                       <p style="margin:0 0 6px 0;font-size:13px;color:#bfc5d4;">Calibrated fraud probability</p>
                       <p style="margin:0 0 8px 0;font-size:46px;line-height:1.0;"><b>{prob_val:.2%}</b></p>
-                      <p style="margin:0 0 8px 0;color:#aeb6c7;font-size:12px;">Calibrated score (selected RF-family calibrator)</p>
+                      <p style="margin:0 0 8px 0;color:#aeb6c7;font-size:12px;">Calibrated score (from exported pipeline)</p>
                       <div style="display:inline-block;background:{meta['color']};color:#ffffff;padding:8px 16px;border-radius:999px;font-weight:800;margin:0 0 8px 0;">
                         {meta['emoji']} {badge_text}
                       </div>
@@ -1758,7 +1839,7 @@ def main():
 
                     evidence_df = pd.DataFrame(
                         [
-                            {"item": "Base RF probability", "value": f"{p_base:.2%}"},
+                            {"item": "Tree baseline probability (rf_plain, SHAP)", "value": f"{p_base:.2%}"},
                             {"item": "Calibrated probability", "value": f"{p_cal:.2%}"},
                             {"item": "Review threshold", "value": f"{review_t:.0%}"},
                             {"item": "Block threshold", "value": f"{block_t:.0%}"},
@@ -1944,14 +2025,20 @@ def main():
         with st.expander("Technical notes", expanded=False):
             final_key = str(metadata.get("resolved_final_model_key", metadata.get("final_model_key", "unknown")))
             final_reason = str(metadata.get("final_model_reason", "n/a"))
-            st.write(f"Final deployed model: chain-aware RandomForest + dynamic RF-family calibration (`{final_key}`).")
+            st.write(
+                f"Final deployed calibrator: `{final_key}` (from `feature_metadata.json`; "
+                "uncalibrated tree SHAP uses `rf_plain_base` when available)."
+            )
             st.write(f"Selection reason: {final_reason}")
             st.json(metadata["triage_thresholds"])
             st.write(
                 "Manual mode uses fallback chain values because transaction-history state lookup "
                 "is not connected in this first app version."
             )
-            st.write("Uses saved artifacts only (preprocessor + RF + selected calibrator). No retraining in app.")
+            st.write(
+                "Uses saved artifacts only (preprocessor + calibrator for `final_model_key` + "
+                "`rf_plain` base for SHAP). No retraining in app."
+            )
 
     with batch_tab:
         st.markdown(
@@ -2073,7 +2160,10 @@ def main():
                 "Batch mode expects precomputed chain-aware inputs (`chain_size`, `is_chain_member`) "
                 "from an upstream transaction-history/state pipeline."
             )
-            st.write("Uses saved artifacts only (preprocessor + RF + selected calibrator). No retraining in app.")
+            st.write(
+                "Uses saved artifacts only (preprocessor + calibrator for `final_model_key` + "
+                "`rf_plain` base for SHAP). No retraining in app."
+            )
 
     with drift_tab:
         st.subheader("Drift Monitor")
@@ -2103,7 +2193,7 @@ def main():
             st.caption("Click 'Run drift calculations now' to compute PSI + PR-AUC delta (monitoring-only).")
         else:
             try:
-                raw_df = load_drift_source_df()
+                raw_df = load_drift_source_df(drift_csv_cache_key())
             except Exception as e:
                 st.error(str(e))
                 st.stop()
@@ -2279,6 +2369,40 @@ def main():
             def _status_icon(s: str) -> str:
                 return {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}.get(s, "⚪")
 
+            n_green = int((psi_df["status"] == "GREEN").sum())
+            n_yellow = int((psi_df["status"] == "YELLOW").sum())
+            n_red = int((psi_df["status"] == "RED").sum())
+            if n_red > 0:
+                psi_overall = "RED"
+            elif n_yellow > 0:
+                psi_overall = "YELLOW"
+            else:
+                psi_overall = "GREEN"
+            max_psi = float(psi_df["psi"].max())
+            worst_row = psi_df.sort_values("psi", ascending=False).iloc[0]
+            st.markdown("**PSI drift — labels + numbers**")
+            st.markdown(
+                "| Label | What it means (this app) |\n"
+                "|-------|--------------------------|\n"
+                "| 🟢 **GREEN** | PSI **&lt; 0.10** — stable |\n"
+                "| 🟡 **YELLOW** | **0.10** ≤ PSI ≤ **0.20** — watch |\n"
+                "| 🔴 **RED** | PSI **&gt; 0.20** — strong shift |\n"
+            )
+            st.caption(
+                "Each monitored feature gets one PSI value, then a label from the table above. "
+                "**Overall** = worst label across features (any 🔴 → overall RED)."
+            )
+            o1, o2, o3, o4, o5 = st.columns(5)
+            o1.metric("Overall", f"{_status_icon(psi_overall)} {psi_overall}")
+            o2.metric("Highest PSI (worst feature)", f"{max_psi:.4f}")
+            o3.metric("🟢 GREEN count", n_green)
+            o4.metric("🟡 YELLOW count", n_yellow)
+            o5.metric("🔴 RED count", n_red)
+            st.caption(
+                f"**Worst feature:** `{worst_row['feature']}` → PSI **{float(worst_row['psi']):.4f}** ({worst_row['status']}). "
+                "Full table below lists every feature."
+            )
+
             psi_show = psi_df.copy()
             psi_show["psi"] = psi_show["psi"].map(lambda x: f"{x:.4f}")
             psi_show["status"] = psi_show["status"].map(lambda s: f"{_status_icon(s)} {s}")
@@ -2312,13 +2436,6 @@ def main():
                     "height": 280,
                 },
                 use_container_width=True,
-            )
-            st.caption("Feature names and exact values:")
-            st.dataframe(
-                psi_df[["feature", "psi", "status"]],
-                use_container_width=True,
-                hide_index=True,
-                height=160,
             )
 
             st.markdown("**Model performance drift (PR-AUC):**")

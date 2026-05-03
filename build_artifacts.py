@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -107,9 +108,20 @@ def select_final_rf_calibrated_model(
     return final_key, final_reason
 
 
+def _resolve_data_path(root: Path) -> Path:
+    """Match app.py: PAYSIM_CSV / PAYSIM_DATA_PATH / PAYSIM_CSV_NAME or default filename."""
+    for key in ("PAYSIM_CSV", "PAYSIM_DATA_PATH"):
+        raw = os.getenv(key)
+        if raw:
+            p = Path(raw).expanduser()
+            return p.resolve() if p.is_absolute() else (root / p).resolve()
+    name = os.getenv("PAYSIM_CSV_NAME", "PS_20174392719_1491204439457_log.csv")
+    return (root / name).resolve()
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
-    data_path = root / "PS_20174392719_1491204439457_log.csv"
+    data_path = _resolve_data_path(root)
     out_dir = root / "artifacts"
     out_dir.mkdir(exist_ok=True)
 

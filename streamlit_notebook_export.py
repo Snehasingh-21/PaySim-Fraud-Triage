@@ -55,11 +55,8 @@ def _build_metadata_payload(
 ) -> dict[str, Any]:
     tbl = calibration_comparison_table.copy().reset_index(drop=True)
     rf_tbl = tbl[tbl["model"].isin(RF_CALIBRATION_ROWS)].copy()
-    if rf_tbl.empty:
-        raise ValueError(
-            "calibration_comparison_table must include rf_plain_uncalibrated, "
-            "rf_plain_sigmoid, and rf_plain_isotonic rows."
-        )
+    calib_records = tbl.to_dict(orient="records")
+    rf_records = rf_tbl.to_dict(orient="records") if not rf_tbl.empty else []
 
     metadata: dict[str, Any] = {
         "input_feature_columns": list(input_feature_columns),
@@ -68,8 +65,12 @@ def _build_metadata_payload(
         "chain_size_cap": int(chain_size_cap),
         "final_model_key": str(final_model_key),
         "final_model_reason": str(final_model_reason),
-        "calibration_selection_rule": "lowest_brier_then_higher_pr_auc_then_higher_roc_auc_within_rf_family",
-        "calibration_comparison_table": rf_tbl.to_dict(orient="records"),
+        "calibration_selection_rule": (
+            "lowest_brier_then_higher_pr_auc_then_higher_roc_auc; rf_preferred_when_enabled"
+        ),
+        # Full finalist calibration sweep (exported joblib filenames map via calibration_model_file_map).
+        "calibration_comparison_table": calib_records,
+        "rf_family_calibration_comparison_table": rf_records,
         "calibration_model_file_map": {
             "rf_plain_uncalibrated": "rf_plain_base.joblib",
             "rf_plain_sigmoid": "rf_plain_sigmoid_calibrated.joblib",
@@ -78,8 +79,9 @@ def _build_metadata_payload(
         "cost_sensitive_policy": {"cost_fp": int(cost_fp), "cost_fn": int(cost_fn)},
         "exported_from_notebook": True,
         "notes": (
-            "Artifacts synced from Jupyter notebook session; preprocessor + RF + RF-family "
-            "calibration + triage thresholds match the notebook evaluation run."
+            "Artifacts synced from Jupyter notebook session; preprocessor, SHAP baseline "
+            "(rf_plain_base.joblib), selected calibrated scorer, and triage thresholds "
+            "match the notebook evaluation run."
         ),
     }
 
@@ -88,7 +90,9 @@ def _build_metadata_payload(
     if bootstrap_prauc:
         metadata["bootstrap_prauc_snapshot"] = dict(bootstrap_prauc)
 
-    row = _selected_row_for_metrics(rf_tbl, final_model_key)
+    row = _selected_row_for_metrics(tbl, final_model_key)
+    if row is None and not rf_tbl.empty:
+        row = _selected_row_for_metrics(rf_tbl, final_model_key)
     if row is not None:
         metadata["selected_calibration_metrics_test"] = {
             "model": final_model_key,
@@ -186,7 +190,7 @@ Values below reflect **the same notebook run** that exported `feature_metadata.j
 
 | Metric | Value |
 |--------|-------|
-| PR-AUC (test, calibrated RF) | {pr_s} |
+| PR-AUC (test, calibrated deploy model) | {pr_s} |
 | Brier Score | {_fmt_brier(float(bri) if bri is not None else None)} |
 | ROC-AUC | {roc_s} |
 | Fraud captured in RED (before → after escalation) | {fc_cell} |
@@ -265,24 +269,19 @@ def sync_from_notebook_session(
     joblib.dump(preprocessor, out_dir / "preprocessor_paysim.joblib")
     joblib.dump(rf_base_model, out_dir / "rf_plain_base.joblib")
 
-    for k in ("rf_plain_sigmoid", "rf_plain_isotonic"):
-        if k not in rf_calibrator_by_key:
-            raise ValueError(
-                f"rf_calibrator_by_key missing {k}. Re-run calibration cell that fills "
-                "NOTEBOOK_RF_CALIBRATORS_FOR_STREAMLIT."
-            )
-        joblib.dump(rf_calibrator_by_key[k], out_dir / f"{k}_calibrated.joblib")
+    if not rf_calibrator_by_key:
+        raise ValueError(
+            "rf_calibrator_by_key is empty. Re-run the Section 12.8 calibration cell that fills "
+            "NOTEBOOK_RF_CALIBRATORS_FOR_STREAMLIT (one entry per finalist × sigmoid/isotonic)."
+        )
 
-    if fk == "rf_plain_uncalibrated":
-        selected = rf_base_model
-    elif fk in rf_calibrator_by_key:
-        selected = rf_calibrator_by_key[fk]
-    else:
-        raise ValueError(f"Unsupported FINAL_MODEL_KEY for export: {fk}")
+    file_map_updates: dict[str, str] = {}
+    for k, cal_obj in dict(rf_calibrator_by_key).items():
+        fn = f"{k}_calibrated.joblib"
+        joblib.dump(cal_obj, out_dir / fn)
+        file_map_updates[str(k)] = fn
 
-    joblib.dump(selected, out_dir / "rf_selected_calibrated.joblib")
-
-    meta = _build_metadata_payload(
+    meta_pre = _build_metadata_payload(
         input_feature_columns=list(x_train_columns),
         processed_feature_names=list(processed_feature_names),
         triage_thresholds=triage_thresholds,
@@ -295,6 +294,28 @@ def sync_from_notebook_session(
         cost_fp=cost_fp,
         cost_fn=cost_fn,
     )
+    merged_map = dict(meta_pre.get("calibration_model_file_map", {}))
+    merged_map.update(file_map_updates)
+    meta_pre["calibration_model_file_map"] = merged_map
+
+    if fk == "rf_plain_uncalibrated":
+        selected = rf_base_model
+    elif fk.endswith("_uncalibrated") and fk != "rf_plain_uncalibrated":
+        raise ValueError(
+            f"Unsupported uncalibrated export key `{fk}`: only rf_plain_uncalibrated maps to "
+            "rf_plain_base.joblib; use a calibrated *_sigmoid/*_isotonic key for other finalists."
+        )
+    elif fk in rf_calibrator_by_key:
+        selected = rf_calibrator_by_key[fk]
+    else:
+        raise ValueError(
+            f"Unsupported FINAL_MODEL_KEY for export: {fk}. "
+            "Expected key present in rf_calibrator_by_key or rf_plain_uncalibrated."
+        )
+
+    joblib.dump(selected, out_dir / "rf_selected_calibrated.joblib")
+
+    meta = meta_pre
 
     (out_dir / "feature_metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
