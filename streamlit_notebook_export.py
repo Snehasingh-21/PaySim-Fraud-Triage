@@ -79,9 +79,9 @@ def _build_metadata_payload(
         "cost_sensitive_policy": {"cost_fp": int(cost_fp), "cost_fn": int(cost_fn)},
         "exported_from_notebook": True,
         "notes": (
-            "Artifacts synced from Jupyter notebook session; preprocessor, SHAP baseline "
-            "(rf_plain_base.joblib), selected calibrated scorer, and triage thresholds "
-            "match the notebook evaluation run."
+            "Artifacts synced from Jupyter notebook session; preprocessor, calibrated deploy scorer "
+            "(TreeExplainer prefers its inner boosted tree — CatBoost/XGB/RF), rf_plain_base.joblib bundled "
+            "as SHAP/runtime fallback only, thresholds match notebook export."
         ),
     }
 

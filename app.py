@@ -176,13 +176,17 @@ def maybe_auto_rebuild_artifacts() -> tuple[bool, str]:
 
 
 def _unwrap_sklearn_calibrated_estimator(est: Any) -> Any:
-    """Prefer the inner fitted estimator from sklearn CalibratedClassifierCV (if present)."""
+    """Single-level: first fitted base estimator inside CalibratedClassifierCV (if any)."""
     cals = getattr(est, "calibrated_classifiers_", None)
     if not cals:
         return est
     try:
         first = cals[0]
         inner = getattr(first, "estimator", None)
+        if inner is None:
+            inner = getattr(first, "estimator_", None)
+        if inner is None:
+            inner = getattr(first, "base_estimator", None)
         if inner is not None:
             return inner
     except Exception:
@@ -190,8 +194,28 @@ def _unwrap_sklearn_calibrated_estimator(est: Any) -> Any:
     return est
 
 
+def _unpack_tree_estimator_for_shap(est: Any) -> Any:
+    """Peel CalibratedClassifierCV shells and sklearn `Pipeline` final steps to reach the concrete tree booster."""
+    from sklearn.pipeline import Pipeline
+
+    cur: Any = est
+    for _ in range(12):
+        nxt = _unwrap_sklearn_calibrated_estimator(cur)
+        if nxt is not cur:
+            cur = nxt
+            continue
+        if isinstance(cur, Pipeline) and getattr(cur, "steps", None):
+            last_est = cur.steps[-1][1]
+            if last_est is cur:
+                break
+            cur = last_est
+            continue
+        break
+    return cur
+
+
 def _shap_explainer_candidates(cal_model: Any, rf_fallback: Any) -> list[Any]:
-    """Order matters: inner calibrator → full calibrator → RF fallback."""
+    """Prefer deploy inner tree → raw calibrator object → bundled RF artifact (SHAP fallback)."""
     out: list[Any] = []
     seen: set[int] = set()
 
@@ -204,18 +228,22 @@ def _shap_explainer_candidates(cal_model: Any, rf_fallback: Any) -> list[Any]:
         seen.add(i)
         out.append(e)
 
-    inner = _unwrap_sklearn_calibrated_estimator(cal_model)
-    if inner is not cal_model:
-        push(inner)
-    push(cal_model)
+    deep_inner = _unpack_tree_estimator_for_shap(cal_model)
+    shallow_inner = _unwrap_sklearn_calibrated_estimator(cal_model)
+    push(deep_inner)
+    if shallow_inner is not deep_inner:
+        push(shallow_inner)
+    if cal_model not in out:
+        push(cal_model)
     push(rf_fallback)
     return out
 
 
 def _pick_tree_estimator_for_shap_and_baseline(cal_model: Any, rf_fallback: Any) -> tuple[Any, str]:
     """
-    Mirror notebook intent: Tree SHAP + “baseline probability” align with deploy model family when possible.
-    Falls back to `rf_plain_base.joblib` if TreeExplainer cannot wrap the deploy object.
+    Tree SHAP + `base_probability` use the **deploy model’s inner tree** (e.g. CatBoost via
+    `CalibratedClassifierCV`) when `shap.TreeExplainer` accepts it. `rf_plain_base.joblib` is only
+    for backup when the deploy object is not tree-SHAP compatible in this environment.
     """
     try:
         import shap  # type: ignore
@@ -228,12 +256,12 @@ def _pick_tree_estimator_for_shap_and_baseline(cal_model: Any, rf_fallback: Any)
         try:
             shap.TreeExplainer(est)
             if id(est) == id(rf_fallback):
-                return est, "`rf_plain_base.joblib` (TreeExplainer fallback)"
-            return est, f"`{type(est).__name__}` unwrapped from deploy calibrator (same family as scoring)"
+                return est, "`rf_plain_base.joblib` (**SHAP fallback** — deploy tree not explodable here)"
+            return est, f"`{type(est).__name__}` (**deploy inner tree**, same boosted model SHAP traces)"
         except Exception as exc:
             last_err = str(exc)[:180]
             continue
-    return rf_fallback, f"`rf_plain_base.joblib` (fallback — deploy explainer error: {last_err})"
+    return rf_fallback, f"`rf_plain_base.joblib` (**SHAP fallback** — deploy inner error: {last_err})"
 
 
 @st.cache_resource(show_spinner=False)
@@ -1991,6 +2019,10 @@ def main():
         with left:
             st.subheader("Transaction details")
             st.caption("Quick examples")
+            st.caption(
+                "\"Fraud-like\" is tuned for mid–high risk under the current deploy scorer—a TRANSFER "
+                "with mismatched balances (not canonical PaySim drain fraud, which scores almost 1 under CatBoost)."
+            )
             ex1, ex2, ex3 = st.columns(3)
             with ex1:
                 if st.button("Low risk", type="secondary", use_container_width=True):
@@ -2006,10 +2038,16 @@ def main():
                 if st.button("Fraud-like", type="secondary", use_container_width=True):
                     st.session_state.update(
                         {
-                            "step": 1, "type": "TRANSFER", "amount": 181.0,
-                            "oldbalanceOrg": 181.0, "newbalanceOrig": 0.0,
-                            "oldbalanceDest": 0.0, "newbalanceDest": 181.0,
-                            "is_chain_member_demo": 0, "chain_size_demo": 1,
+                            # Calibrated ~65% under catboost_plain_sigmoid (distinct from canonical drain TRANSFER≈100%).
+                            "step": 200,
+                            "type": "TRANSFER",
+                            "amount": 6296.24,
+                            "oldbalanceOrg": 7608.66,
+                            "newbalanceOrig": 0.0,
+                            "oldbalanceDest": 127395.62,
+                            "newbalanceDest": 128385.80,
+                            "is_chain_member_demo": 0,
+                            "chain_size_demo": 1,
                         }
                     )
             with ex3:
@@ -2088,7 +2126,7 @@ def main():
                 st.progress(0)
             else:
                 pred = saved["pred"]
-                tx_type = saved["tx_type"]
+                tx_type = str(pred.get("type", saved["tx_type"]))
                 bucket = str(pred["triage_bucket"]).upper()
                 meta = bucket_meta(bucket)
                 prob_val = float(pred["calibrated_probability"])
@@ -2154,7 +2192,7 @@ def main():
                         "Fraud score and final action come from the calibrated ML pipeline."
                     )
                     chips = []
-                    chips.extend(build_case_consistent_chips(pred, str(pred.get("type", tx_type))))
+                    chips.extend(build_case_consistent_chips(pred, tx_type))
                     up = [x.strip() for x in str(pred.get("risk_up_drivers", "")).split("|") if x.strip() and x.strip() != "None"]
                     down = [x.strip() for x in str(pred.get("risk_down_drivers", "")).split("|") if x.strip() and x.strip() != "None"]
                     chips.extend([f"Risk up: {c}" for c in up[:2]])
@@ -2184,7 +2222,7 @@ def main():
                         [
                             {
                                 "item": (
-                                    f"Baseline probability (Tree SHAP, "
+                                    f"Uncalibrated tree probability (Tree SHAP booster: "
                                     f"{metadata.get('tree_shap_backend_class', '?')})"
                                 ),
                                 "value": f"{p_base:.2%}",

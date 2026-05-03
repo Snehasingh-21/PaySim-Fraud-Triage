@@ -51,7 +51,7 @@ In the **research notebook** and in **`build_artifacts.py`**, `chain_size` and `
 
 **Refreshing without the notebook (`build_artifacts.py`):** the script retrains/refreshes the **RF-family** preprocessor and joblibs (`rf_plain_base.joblib`, sigmoid/isotonic RF calibrators, merged calibration table rows). It **does not automatically switch deploy to RF**: **`final_model_key` is chosen** after **`PAYSIM_FINAL_MODEL_KEY`** (if set), otherwise **prior finalist** if its calibrator file still exists under `artifacts/`, otherwise the **RF** pick that `build_artifacts` just produced. So you only end on **`rf_plain_sigmoid`** when there is **no surviving non-RF scorer on disk** (or when you explicitly set the env var).
 
-**Local SHAP in the app:** feature attributions come from **`rf_plain_base.joblib`** (`TreeExplainer`). That baseline can differ from **`final_model_key`** when the deploy scorer is CatBoost/XGB—same separation as in the notebook.
+**Local SHAP in the app:** `TreeExplainer` runs on the **fitted tree model inside the deploy calibrator** (e.g. **CatBoost** unwrapped from `CalibratedClassifierCV`) whenever SHAP accepts that object—**baseline probability** (`base_probability` in outputs) tracks that same tree. **`artifacts/rf_plain_base.joblib`** is **only loaded** so the Streamlit bundle always has **one** RF skeleton for SHAP/testing when CatBoost/XGB/LightGBM cannot be explained in-process; **it is not the default SHAP target** when CatBoost unwrap works.
 
 **Notebook training breadth:** Section **12** compares LR, RF, boosting, CatBoost, etc.; export picks **`FINAL_MODEL_KEY`** and the matching deploy calibrator. **`build_artifacts.py`** refreshes RF-family joblibs and **merges** calibration tables against prior **`feature_metadata.json`**—**deploy can stay CatBoost/XGB** when those calibrator files are still present under `artifacts/`.
 
@@ -153,8 +153,8 @@ The Streamlit “Drift Monitor” tab implements monitoring-only behavior (no re
 ## 12. Versioning / artifacts
 The Streamlit app loads from `artifacts/`:
 - **Preprocessor** — `preprocessor_paysim.joblib` (column order + encoding from the training pipeline).
-- **Tree baseline for SHAP** — `rf_plain_base.joblib` (plain RF; `TreeExplainer` uses this when the deploy model is not an RF or when the calibrator is not tree-SHAP-friendly). This is **not** the same file as the **production fraud score** when `final_model_key` is CatBoost/XGB.
-- **Deploy scorer (calibrated)** — whatever file `calibration_model_file_map[final_model_key]` points to (e.g. `catboost_plain_sigmoid_calibrated.joblib` for the current notebook-led export). This is what produces **probability + triage buckets** in the app.
+- **Deploy scorer (calibrated)** — whatever file `calibration_model_file_map[final_model_key]` points to (e.g. `catboost_plain_sigmoid_calibrated.joblib` for the current notebook-led export). This drives **probability + triage buckets**.
+- **Tree model for Tree SHAP + `base_probability`** — the Streamlit loader **unwraps** the calibrated object to its inner booster (typically **CatBoostClassifier** today). **`rf_plain_base.joblib`** is a **standalone RF** kept on disk **only as a SHAP/runtime fallback** if the unwrap path cannot be wrapped by `shap.TreeExplainer` on your Python/SHAP/CatBoost build.
 - **Feature metadata** — `feature_metadata.json` (thresholds, feature names, `final_model_key`, calibration table, optional bootstrap/triage snapshots).
 
 If you rebuild artifacts using `build_artifacts.py`, the Streamlit app should remain consistent because it reads thresholds and feature mappings from `feature_metadata.json`.

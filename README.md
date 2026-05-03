@@ -48,7 +48,7 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 | **Engineered numeric features** | `orig_delta`, `dest_delta`, `orig_residual`, zero-balance flags, `log_amount` | Captures balance consistency and scale skew; documented in EDA. |
 | **Chain features** | Groupby `(step, amount)` + TRANSFER ∧ CASH_OUT + cap | Domain pattern; cap limits noise from massive groups. |
 | **Models compared** | LR, RF, XGBoost, LightGBM, CatBoost (optional), BRF, GNB, … (notebook §12) | Same chain-aware pipeline; finalists vary by run. |
-| **Final scorer** | **Reference export:** **`catboost_plain_sigmoid`** (calibrated CatBoost) via **`final_model_key`** + **`calibration_model_file_map`**. Optional **`build_artifacts.py`**: RF-family calibration only. | App loads metadata-driven scorer; SHAP baseline stays **`rf_plain`** unless you change artifacts. |
+| **Final scorer** | **Reference export:** **`catboost_plain_sigmoid`** (calibrated CatBoost) via **`final_model_key`** + **`calibration_model_file_map`**. Optional **`build_artifacts.py`**: RF-family calibration only. | App loads metadata-driven scorer; **Tree SHAP** targets the **deploy model’s inner tree** when supported (**CatBoost**/XGB/RF unwrap). **`rf_plain_base.joblib`** remains a packaged **fallback** only. |
 | **Triage** | Three-way **GREEN / YELLOW / RED** from exported thresholds (`review_threshold`, `block_threshold`, `moderate_cutoff` in `feature_metadata.json`) | Values depend on your notebook §12.9b run; chain escalation rule matches that export. |
 
 ### Additional methods added for robustness / clarity
@@ -85,7 +85,7 @@ If enabled in Streamlit, the LLM is used only as an **analyst-style explanation 
 
 Pipeline placement:
 
-`transaction input → preprocessing → calibrated CatBoost (`catboost_plain_sigmoid` in the reference export; otherwise whatever `final_model_key` names in metadata) → fraud probability → triage bucket → SHAP (tree baseline on `rf_plain_base`) / reasons → optional LLM analyst summary`
+`transaction input → preprocessing → calibrated finalist (e.g. `catboost_plain_sigmoid`) → calibrated fraud probability + triage bucket → Tree SHAP on the **same inner booster** when explodable (else `rf_plain_base` fallback) → reasons → optional LLM analyst summary`
 
 This keeps the LLM strictly in the explanation layer; it does not change model training, calibration, thresholds, or triage decisions.
 
@@ -163,7 +163,7 @@ Group_Project/
 ├── .gitignore
 ├── app.py
 ├── build_artifacts.py
-├── artifacts/                 # preprocessor, base RF for SHAP, calibrated joblib(s), feature_metadata.json (see below)
+├── artifacts/                 # preprocessor, calibrated joblib(s), optional RF stub for SHAP fallback, feature_metadata.json (see below)
 ├── assets/                    # banner SVG + README screenshots
 ├── 01_eda_paysim.ipynb
 ├── MODEL_CARD.md
@@ -195,7 +195,7 @@ streamlit run app.py
 - **`artifacts/preprocessor_paysim.joblib`** — same transforms as the notebook.
 - **`artifacts/feature_metadata.json`** — **`final_model_key`** plus **`calibration_model_file_map`**. The **checked-in reference export** uses **`catboost_plain_sigmoid`** → `catboost_plain_sigmoid_calibrated.joblib`; another rerun may list XGBoost or RF variants instead.
 - **The calibrated pipeline** file named by that map — this is the **fraud probability** used for triage on Dashboard, Batch, and Drift Monitor.
-- **`artifacts/rf_plain_base.joblib`** — **only** for **SHAP** / “tree baseline” probability in the UI; it may differ from **`final_model_key`** when the notebook picks a non-RF finalist.
+- **`artifacts/rf_plain_base.joblib`** — **backup** tree for **Tree SHAP** / uncalibrated “tree probability” if the deploy object can’t be explained in your environment; **normally** the app unwraps **CatBoost/XGB/RF** from the calibrated pipeline first.
 
 **Two ways to populate `artifacts/`**
 
