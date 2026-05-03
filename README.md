@@ -4,7 +4,9 @@
 
 ![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)
 
-*Proposed solution overview: PaySim → EDA → stratified split → split-safe chain discovery & features → preprocessing → model comparison → **calibration** (reference export: **`catboost_plain_sigmoid`**) → triage; plus validation (SHAP/LIME, bootstrap CI, error analysis, drift/PSI) and Streamlit deployment.*
+![End-to-end ML flowchart — no-chain vs chain-aware pipeline through calibration & Streamlit demo](assets/ml_flow_diagram_chain_aware.png)
+
+*Above: proposed solution infographic, then detailed flowchart — PaySim → EDA → stratified split → split-safe chain discovery & features → preprocessing → model comparison → **calibration** (reference export: **`catboost_plain_sigmoid`**) → triage; plus validation (SHAP/LIME, bootstrap CI, error analysis, drift/PSI) and Streamlit deployment.*
 
 ---
 
@@ -126,11 +128,11 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 
 ### C) Chain-aware framework diagrams
 
-Lead visual is also shown at the top of this README: **[`assets/ml_framework_chain_aware.png`](assets/ml_framework_chain_aware.png)** (proposed solution / split-safe fraud triage framework — EDA → split → chain features → preprocessing → modeling → calibration → triage).
+These two figures also appear **at the top of this README** (framework first, flowchart immediately after).
 
-**End-to-end ML flowchart:** no-chain vs chain-aware branches, finalist comparison, calibration, threshold/triage policy, artifact export, and Streamlit demo.
+![Chain-aware fraud detection & triage framework](assets/ml_framework_chain_aware.png)
 
-![ML framework chain-aware flowchart](assets/ml_flow_diagram_chain_aware.png)
+![ML framework chain-aware flowchart — calibration, triage policy, artifact export, Streamlit](assets/ml_flow_diagram_chain_aware.png)
 
 ---
 
