@@ -60,6 +60,7 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
   - LIME is a perturbation-based surrogate (used only as an academic robustness comparison).
 - **Bootstrap PR-AUC CI (notebook-only)** after final calibration to quantify uncertainty of PR-AUC on the untouched test split.
 - **Error Analysis (notebook-only)** section on false negatives and false positives for the final deployed/demo policy, including compact tables and grouped summaries.
+- **Isolation Forest (§12.7b, notebook-only):** unsupervised anomaly baseline on chain-aware features (`IsolationForest`), train-only fit with **no labels**, threshold from **training** anomaly scores (contamination anchored to train fraud rate) so evaluation stays split-safe; PR-AUC / precision / recall vs test labels for comparison only. **Not** in calibration, **`FINAL_MODEL_KEY`**, artifact export, SHAP, triage rules, or Streamlit — supervised calibrated path is unchanged.
 
 **Important methodology note (academic honesty):** in `01_eda_paysim.ipynb` and `build_artifacts.py`, `chain_size` and `is_chain_member` are computed **after** the stratified train/test split, **separately on training vs test rows** (so the test set does not inform training-side group statistics). A **production** system would still materialize chain state from **transaction history up to decision time** in a streaming-safe way; the Streamlit **manual** path can use fallback chain fields as documented in the UI.
 
