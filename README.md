@@ -4,6 +4,18 @@
 > **Repo:** [github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage)
 > **Deployed scorer (reference export):** `catboost_plain_sigmoid` (calibrated CatBoost) — see [post-calibration leaderboard](#post-calibration-leaderboard-chain-aware-finalists-128).
 
+### Course submission (notebook + Streamlit + visible results)
+
+Submit this **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage).
+
+| Deliverable | Location |
+|-------------|----------|
+| **Notebook** (code + saved plots/tables/metrics) | [`01_eda_paysim.ipynb`](01_eda_paysim.ipynb) |
+| **Same notebook as static HTML** (open in any browser; full outputs embedded) | [`reports/01_eda_paysim_with_outputs.html`](reports/01_eda_paysim_with_outputs.html) |
+| **Streamlit app** | [`app.py`](app.py) — run from repo root: `streamlit run app.py` (loads calibrated model + thresholds from [`artifacts/feature_metadata.json`](artifacts/feature_metadata.json), produced by the notebook export section). |
+
+The notebook and the app share one consistent scoring contract: **`artifacts/`** matches the notebook’s **`final_model_key`** / calibration export.
+
 **Course / research-style ML project** on the synthetic **PaySim** mobile-money dataset: exploratory analysis, **leakage-aware** feature design, **no-chain vs chain-aware** model comparison, **probability calibration**, **cost-sensitive** triage rules, **drift monitoring (PSI)**, and a **Streamlit** deployment for interactive single-transaction scoring + CSV batch scoring (with an optional local-LLM analyst summary via **Ollama**).
 
 ![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)

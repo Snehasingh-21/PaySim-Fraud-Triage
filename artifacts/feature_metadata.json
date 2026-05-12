@@ -139,7 +139,7 @@
     "cost_fn": 500
   },
   "exported_from_notebook": true,
-  "notes": "Artifacts synced from Jupyter notebook session; preprocessor, SHAP baseline (rf_plain_base.joblib), selected calibrated scorer, and triage thresholds match the notebook evaluation run.",
+  "notes": "Artifacts synced from Jupyter notebook session; preprocessor, calibrated deploy scorer (TreeExplainer prefers its inner boosted tree \u2014 CatBoost/XGB/RF), rf_plain_base.joblib bundled as SHAP/runtime fallback only, thresholds match notebook export.",
   "triage_snapshot": {
     "fraud_capture_in_red_after_pct": 99.75654290931223,
     "fraud_capture_in_red_before_pct": 99.75654290931223,
