@@ -91,6 +91,33 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 
 **Anomaly baseline (notebook §12.7b, not deployed):** `Isolation Forest` — see [Anomaly Baseline — Isolation Forest](#anomaly-baseline--isolation-forest) below.
 
+### Pre-calibration leaderboard (chain-aware, §12.4 → §12.7a)
+
+This is the table that **drives the finalist selection** for §12.8 calibration. Same stratified split, same chain-aware preprocessing for every row. Values are taken from the notebook's `metrics_with_chain` after §12.4 (chain-aware setup B), `REPORT_EXPERIMENTS` view.
+
+Sorted by **PR-AUC ↓, Recall ↓, Precision ↓** — the exact lexicographic rule §12.7a uses to pick the calibration shortlist.
+
+| Rank | Model | Precision | Recall | F1 | ROC-AUC | PR-AUC | Notes |
+|---|-------|-----------|--------|----|---------|--------|-------|
+| 1 | **`catboost_plain`** ⭐ | **1.0000** | **0.9976** | **0.9988** | **0.9999** | **0.9986** | Leader → calibration finalist |
+| 2 | **`rf_plain`** ⭐ | 1.0000 | 0.9976 | 0.9988 | 0.9996 | 0.9985 | Top-2 → mandatory finalist |
+| 3 | **`xgb_plain`** ⭐ | 0.9994 | 0.9890 | 0.9942 | 0.9988 | 0.9937 | Close to leader → extra finalist |
+| 4 | `brf_plain` | 0.6015 | 0.9452 | 0.7351 | 0.9993 | 0.9631 | Recall OK but precision too low — fails the floor |
+| 5 | `logreg_plain` | 0.9853 | 0.6117 | 0.7548 | 0.9947 | 0.8321 | Recall too low |
+| 6 | `lgbm_plain` | 0.5730 | 0.8929 | 0.6981 | 0.9017 | 0.5185 | Far from leader on PR-AUC |
+| 7 | `gnb_plain` | 0.0069 | 0.9963 | 0.0138 | 0.9875 | 0.4125 | Recall-only; precision ≈ 0 |
+| 8 | `lgbm_weighted` | 0.0397 | 0.9501 | 0.0762 | 0.9602 | 0.0378 | Far from leader on PR-AUC |
+
+> Same eight rows are shown in the notebook output of §12.5 ("B. Chain-aware metrics (selected models)"). The four remaining experiments — `logreg_class_weight`, `logreg_smote`, `rf_class_weight`, `rf_smote` — are trained and evaluated but kept off this comparison view since they sit either inside (`rf_class_weight`, `rf_smote` ≈ `rf_plain`) or below (`logreg_class_weight`, `logreg_smote` ≈ `logreg_plain`) the corresponding plain row.
+
+**How the top 3 were chosen for calibration (§12.7a policy):**
+
+- **Step 1 — mandatory top 2** (always promoted): the **two leaders** under `PR-AUC ↓, Recall ↓, Precision ↓` → `catboost_plain`, `rf_plain`.
+- **Step 2 — extras only if close to the leader**: include any model whose gap to the leader satisfies **PR-AUC gap ≤ 0.01**, **Recall gap ≤ 0.01**, **Precision ≥ 0.02 (floor)**, capped by `MAX_FINALISTS` — only `xgb_plain` qualifies (Δ PR-AUC = 0.0049, Δ Recall = 0.0086, Precision = 0.9994).
+- **Step 3 — everyone else dropped**: `brf_plain` is filtered out by the precision floor (0.6015 vs ≈ 1.0000 leader); `lgbm_plain` / `lgbm_weighted` / `gnb_plain` / `logreg_plain` fall outside both PR-AUC and Recall gaps.
+
+**Result:** three chain-aware finalists go into §12.8 — `catboost_plain`, `rf_plain`, `xgb_plain` — each calibrated with **sigmoid** and **isotonic**, producing the **9-row post-calibration table** below.
+
 ### Post-calibration leaderboard (chain-aware finalists, §12.8)
 
 Finalists shortlisted by §12.7a are calibrated with **sigmoid** and **isotonic** (`CalibratedClassifierCV`, `cv=CALIBRATION_CV` fit on train, evaluated on held-out test). Values below are copied from **`artifacts/feature_metadata.json`** (`calibration_comparison_table`) for the checked-in export.
