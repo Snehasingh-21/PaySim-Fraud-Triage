@@ -70,6 +70,41 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 
 ---
 
+## Why the chain-aware setup is the deployed path (A/B evidence, §12.4 → §12.5)
+
+Every experiment in §12.4 is trained **twice** under the same split, same labels, same preprocessing — once **without** `chain_size` / `is_chain_member` (setup A), once **with** them (setup B). The only deliberate difference is which columns enter the `ColumnTransformer`. The full A/B numbers are in the notebook's `chain_vs_no_chain_table`; the per-model summary below uses the PR-AUC column from that table.
+
+| Experiment | PR-AUC (no-chain, A) | PR-AUC (chain-aware, B) | Δ PR-AUC (B − A) | Interpretation |
+|---|---:|---:|---:|---|
+| `gnb_plain` | 0.2822 | **0.4125** | **+0.1303** | Naive Bayes goes from unusable to mediocre — chain is a strong signal it can't fake |
+| `logreg_class_weight` | 0.6931 | **0.7759** | **+0.0828** | Linear model gains a real chunk of PR-AUC |
+| `lgbm_weighted` | 0.0142 | **0.0378** | **+0.0236** | Still poor in absolute terms, but ~2.7× better with chain |
+| `logreg_smote` | 0.8273 | **0.8395** | **+0.0122** | Small but consistent gain on the linear baseline |
+| `logreg_plain` | 0.8217 | **0.8321** | **+0.0104** | Same pattern as above |
+| `rf_plain` | 0.9981 | **0.9985** | **+0.0004** | Already near ceiling — chain is neutral / mildly helpful |
+| `catboost_plain` | 0.9986 | 0.9986 | −0.0001 | Indistinguishable at the test-set ceiling |
+| `rf_class_weight` | 0.9984 | 0.9983 | −0.0001 | Same — at the ceiling |
+| `rf_smote` | 0.9981 | 0.9979 | −0.0002 | Same — at the ceiling |
+| `xgb_plain` | 0.9981 | 0.9937 | −0.0044 | Tiny regression — within noise at this scale |
+| `brf_plain` | 0.9971 | 0.9631 | −0.0340 | Sub-bagged tree drops some precision when extra features are added |
+| `lgbm_plain` | 0.8352 | 0.5185 | −0.3168 | LightGBM-plain destabilizes with the chain columns (hyperparameter sensitivity) |
+
+> Direction matters here, not the magnitude at the top of the table — `catboost_plain` / `rf_plain` already sit at the PR-AUC ceiling on this synthetic dataset, so neither direction of Δ is statistically meaningful for them. The chain signal is doing its real work on the **weaker / linear / NB** models, where it lifts PR-AUC by hundreds of basis points.
+
+### Why we keep the chain-aware setup as the deployed path
+
+Even though the top tree models look unchanged on PR-AUC, the chain-aware pipeline is the one we ship for **five concrete reasons**:
+
+1. **Domain alignment.** The canonical PaySim fraud narrative is *TRANSFER → CASH_OUT* on the same `(step, amount)`. Encoding that as `is_chain_member` makes the feature space match the documented attack pattern instead of forcing the model to rediscover it from raw rows.
+2. **Robust gains for non-tree models.** `gnb_plain` (+0.1303), `logreg_class_weight` (+0.0828), `logreg_smote` (+0.0122), `logreg_plain` (+0.0104) all improve. Even if we deploy CatBoost, the same preprocessing has to work for the entire model zoo we benchmark against.
+3. **No measurable downside for the deployed model.** `catboost_plain` chain vs no-chain is Δ −0.0001 (indistinguishable). We get domain interpretability for free.
+4. **Triage policy depends on it.** The §12.9b cost-aware thresholds export a **chain-escalation rule** (`is_chain_member == 1 AND prob ≥ moderate_cutoff` → escalate YELLOW to RED). That rule is meaningless without `is_chain_member` at scoring time, so the **deployed scorer must be trained with the chain columns** to keep the input contract consistent.
+5. **Explainability surfaces it.** Tree SHAP on the deployed model lists `num__is_chain_member` and `num__chain_size` among the top local drivers for chain-pattern transactions; this is what makes the Dashboard's "why this decision" panel intelligible for non-technical reviewers.
+
+**Decision:** keep chain-aware (setup B) as the **single** deployed pipeline — `app.py`, `build_artifacts.py`, `feature_metadata.json`, and the triage rules are all wired to expect `chain_size` + `is_chain_member` at inference time. Setup A (no-chain) remains in the notebook only, as the A/B control that this section evidences.
+
+---
+
 ## All models trained & post-calibration leaderboard
 
 **Total supervised models trained (chain-aware, §12.4):** **12**
