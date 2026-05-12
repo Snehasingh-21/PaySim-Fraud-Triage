@@ -82,18 +82,18 @@ Chain escalation rule:
 ## 8. Evaluation and evidence
 ### Key metrics (deployed model) + supporting evidence
 
-Values below mirror **`artifacts/feature_metadata.json`** saved by the **`01_eda_paysim.ipynb` §12.9b export** (selected scorer: **`catboost_plain_sigmoid`**) and match the printable notebook / exported PDF narrative for calibration and bootstrap.
+Values below reflect **the same notebook run** that exported `feature_metadata.json` (selected scorer: **`catboost_plain_sigmoid`**).
 
 | Metric | Value |
 |--------|-------|
-| PR-AUC (test, calibrated deploy model) | 0.9985543777615832 |
-| Brier Score | 3.1436978686657607e-06 |
-| ROC-AUC | 0.999905408255468 |
+| PR-AUC (test, calibrated deploy model) | 0.998554 |
+| Brier Score | 3.143698e-06 |
+| ROC-AUC | 0.999905 |
 | Fraud captured in RED (before → after escalation) | 99.76% → 99.76% |
 | Legitimate allowed (GREEN) | 100.000% |
-| Logistic Regression ΔPR-AUC (chain − no-chain; **`logreg_plain`**, notebook §12.5) | **+0.0104** |
+| Logistic Regression ΔPR-AUC (chain vs no-chain; notebook §12.5) | +0.010 |
 
-**Bootstrap PR-AUC (95% CI, notebook §12.9a, same `FINAL_MODEL_KEY`):**
+**Bootstrap PR-AUC (95% CI, notebook §12.9a):**
 
 | Statistic | Value |
 |----------|-------|
