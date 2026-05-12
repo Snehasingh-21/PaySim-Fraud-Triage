@@ -8,6 +8,11 @@
 
 Submit this **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage).
 
+**One-click links (for professor review):**
+- **Notebook (`.ipynb`)**: [Open notebook](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/01_eda_paysim.ipynb)
+- **Notebook report (`.html`)**: [Open HTML report](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/reports/01_eda_paysim_with_outputs.html)
+- **Streamlit screenshots gallery**: [Jump to Streamlit screenshots](#a-streamlit-app-screens)
+
 | Deliverable | Location |
 |-------------|----------|
 | **Notebook** (code + saved plots/tables/metrics) | [`01_eda_paysim.ipynb`](01_eda_paysim.ipynb) |
@@ -250,9 +255,10 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 
 **Dashboard** — manual transaction scoring, triage panel, SHAP explanations, and optional analyst summary:
 ![Dashboard tab](assets/streamlit_tab_dashboard.png)
+![Dashboard SHAP view](assets/streamlit_tab_dashboard_shap.png)
 
 **Batch upload** — CSV upload + bucket summary (fast scoring without SHAP):
-![Batch upload tab](assets/image-3d6b6a66-2581-46c5-b3dd-a92d91142cf3.png)
+![Batch upload tab](assets/streamlit_tab_batch_upload.png)
 
 **Drift Monitor** — PSI feature drift table, summary chart, optional PR-AUC early vs late comparison (monitoring-only):
 ![Drift Monitor tab](assets/streamlit_tab_drift_monitor.png)
