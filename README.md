@@ -10,14 +10,13 @@ Submit this **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-
 
 **One-click links (for professor review):**
 - **Notebook (`.ipynb`)**: [Open notebook](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/01_eda_paysim.ipynb)
-- **Notebook report (`.html`)**: [Open HTML report](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/reports/01_eda_paysim_with_outputs.html)
 - **Live report (GitHub Pages)**: [Open rendered report](https://snehasingh-21.github.io/PaySim-Fraud-Triage/report_latest.html)
 - **Streamlit screenshots gallery**: [Jump to Streamlit screenshots](#a-streamlit-app-screens)
 
 | Deliverable | Location |
 |-------------|----------|
 | **Notebook** (code + saved plots/tables/metrics) | [`01_eda_paysim.ipynb`](01_eda_paysim.ipynb) |
-| **Same notebook as static HTML** (open in any browser; full outputs embedded) | [`reports/01_eda_paysim_with_outputs.html`](reports/01_eda_paysim_with_outputs.html) |
+| **Rendered report (recommended)** | [GitHub Pages report](https://snehasingh-21.github.io/PaySim-Fraud-Triage/report_latest.html) |
 | **Streamlit app** | [`app.py`](app.py) — run from repo root: `streamlit run app.py` (loads calibrated model + thresholds from [`artifacts/feature_metadata.json`](artifacts/feature_metadata.json), produced by the notebook export section). |
 
 The notebook and the app share one consistent scoring contract: **`artifacts/`** matches the notebook’s **`final_model_key`** / calibration export.
