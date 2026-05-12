@@ -1,6 +1,10 @@
 # PaySim Fraud Triage — Chain-Aware Mobile-Money Fraud Detection
 
-**Course / research-style ML project** on the synthetic **PaySim** mobile-money dataset: exploratory analysis, **leakage-aware** feature design, **no-chain vs chain-aware** model comparison, **probability calibration**, **cost-sensitive** triage rules, and a **Streamlit** deployment for interactive and batch scoring.
+> **Status:** completed end-to-end research / coursework project.
+> **Repo:** [github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage)
+> **Deployed scorer (reference export):** `catboost_plain_sigmoid` (calibrated CatBoost) — see [post-calibration leaderboard](#post-calibration-leaderboard-chain-aware-finalists-128).
+
+**Course / research-style ML project** on the synthetic **PaySim** mobile-money dataset: exploratory analysis, **leakage-aware** feature design, **no-chain vs chain-aware** model comparison, **probability calibration**, **cost-sensitive** triage rules, **drift monitoring (PSI)**, and a **Streamlit** deployment for interactive single-transaction scoring + CSV batch scoring (with an optional local-LLM analyst summary via **Ollama**).
 
 ![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)
 
@@ -47,7 +51,7 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 | **Preprocessing** | `ColumnTransformer`: `StandardScaler` on numeric, `OneHotEncoder(handle_unknown="ignore")` on `type` | Linearly sensitive models need scaling; trees still receive consistent numeric inputs; unknown categories at inference. |
 | **Engineered numeric features** | `orig_delta`, `dest_delta`, `orig_residual`, zero-balance flags, `log_amount` | Captures balance consistency and scale skew; documented in EDA. |
 | **Chain features** | Groupby `(step, amount)` + TRANSFER ∧ CASH_OUT + cap | Domain pattern; cap limits noise from massive groups. |
-| **Models compared** | LR, RF, XGBoost, LightGBM, CatBoost (optional), BRF, GNB, … (notebook §12) | Same chain-aware pipeline; finalists vary by run. |
+| **Models compared** | **Supervised (§12.4):** `logreg_plain`, `logreg_class_weight`, `logreg_smote`, `rf_plain`, `rf_class_weight`, `rf_smote`, `xgb_plain`, `lgbm_plain`, `lgbm_weighted`, `brf_plain`, `gnb_plain`, `catboost_plain` (when available). **Anomaly baseline (§12.7b):** `Isolation Forest`. | Same chain-aware preprocessing for every supervised model; finalists for calibration (§12.7a → §12.8) are chosen dynamically from the shortlist. |
 | **Final scorer** | **Reference export:** **`catboost_plain_sigmoid`** (calibrated CatBoost) via **`final_model_key`** + **`calibration_model_file_map`**. Optional **`build_artifacts.py`**: RF-family calibration only. | App loads metadata-driven scorer; **Tree SHAP** targets the **deploy model’s inner tree** when supported (**CatBoost**/XGB/RF unwrap). **`rf_plain_base.joblib`** remains a packaged **fallback** only. |
 | **Triage** | Three-way **GREEN / YELLOW / RED** from exported thresholds (`review_threshold`, `block_threshold`, `moderate_cutoff` in `feature_metadata.json`) | Values depend on your notebook §12.9b run; chain escalation rule matches that export. |
 
@@ -63,6 +67,75 @@ PaySim simulates digital payment flows with extreme **class imbalance** (fraud i
 - **Isolation Forest (§12.7b, notebook-only):** unsupervised anomaly baseline on chain-aware features (`IsolationForest`), train-only fit with **no labels**, threshold from **training** anomaly scores (contamination anchored to train fraud rate) so evaluation stays split-safe; PR-AUC / precision / recall vs test labels for comparison only. **Not** in calibration, **`FINAL_MODEL_KEY`**, artifact export, SHAP, triage rules, or Streamlit — supervised calibrated path is unchanged.
 
 **Important methodology note (academic honesty):** in `01_eda_paysim.ipynb` and `build_artifacts.py`, `chain_size` and `is_chain_member` are computed **after** the stratified train/test split, **separately on training vs test rows** (so the test set does not inform training-side group statistics). A **production** system would still materialize chain state from **transaction history up to decision time** in a streaming-safe way; the Streamlit **manual** path can use fallback chain fields as documented in the UI.
+
+---
+
+## All models trained & post-calibration leaderboard
+
+**Total supervised models trained (chain-aware, §12.4):** **12**
+
+| # | Model key | Family | Imbalance handling |
+|---|-----------|--------|-------------------|
+| 1 | `logreg_plain` | Logistic Regression | plain |
+| 2 | `logreg_class_weight` | Logistic Regression | class-weight |
+| 3 | `logreg_smote` | Logistic Regression | SMOTE |
+| 4 | `rf_plain` | Random Forest | plain |
+| 5 | `rf_class_weight` | Random Forest | class-weight |
+| 6 | `rf_smote` | Random Forest | SMOTE |
+| 7 | `xgb_plain` | XGBoost | plain (scale_pos_weight) |
+| 8 | `lgbm_plain` | LightGBM | plain |
+| 9 | `lgbm_weighted` | LightGBM | class-weight |
+| 10 | `brf_plain` | Balanced Random Forest | inherent |
+| 11 | `gnb_plain` | Gaussian Naive Bayes | plain |
+| 12 | `catboost_plain` | CatBoost (when installed) | plain |
+
+**Anomaly baseline (notebook §12.7b, not deployed):** `Isolation Forest` — see [Anomaly Baseline — Isolation Forest](#anomaly-baseline--isolation-forest) below.
+
+### Post-calibration leaderboard (chain-aware finalists, §12.8)
+
+Finalists shortlisted by §12.7a are calibrated with **sigmoid** and **isotonic** (`CalibratedClassifierCV`, `cv=CALIBRATION_CV` fit on train, evaluated on held-out test). Values below are copied from **`artifacts/feature_metadata.json`** (`calibration_comparison_table`) for the checked-in export.
+
+| Model | Brier ↓ | ROC-AUC ↑ | PR-AUC ↑ |
+|-------|---------|-----------|----------|
+| `catboost_plain_uncalibrated` | 3.261e-06 | 0.999905 | 0.998554 |
+| **`catboost_plain_sigmoid`** ⭐ **winner** | **3.144e-06** | **0.999905** | **0.998554** |
+| `catboost_plain_isotonic` | 3.187e-06 | 0.999851 | 0.998447 |
+| `rf_plain_uncalibrated` | 7.460e-06 | 0.999645 | 0.998508 |
+| `rf_plain_sigmoid` | 3.276e-06 | 0.999645 | 0.998508 |
+| `rf_plain_isotonic` | 3.337e-06 | 0.999646 | 0.998239 |
+| `xgb_plain_uncalibrated` | 1.428e-05 | 0.998754 | 0.993653 |
+| `xgb_plain_sigmoid` | 1.486e-05 | 0.998754 | 0.993653 |
+| `xgb_plain_isotonic` | 1.440e-05 | 0.998300 | 0.993112 |
+
+**Selection rule (from metadata):** `lowest_brier_then_higher_pr_auc_then_higher_roc_auc` (RF preferred only when explicitly enabled).
+**`final_model_key` = `catboost_plain_sigmoid`** — wins on Brier (best probability calibration) while tying CatBoost-uncalibrated on PR-AUC and ROC-AUC, so the sigmoid wrapper is preferred for triage-style probability outputs.
+
+> Numbers reflect the reference notebook export. Rerunning §12.7a → §12.8 with different finalist policy or CV can change which row wins; the app always reads `final_model_key` from `feature_metadata.json`, never a hard-coded name.
+
+---
+
+## Anomaly Baseline — Isolation Forest
+
+**Where:** notebook **§12.7b** (between §12.7a model comparison and §12.8 calibration).
+**Role:** **benchmark only.** Not in calibration, `final_model_key`, artifact export, SHAP, triage rules, or Streamlit. Supervised path is unchanged.
+
+**Setup (split-safe):**
+- Inputs: chain-aware processed matrices `Xtr_ch` / `Xte_ch` (same preprocessing as the supervised models).
+- `IsolationForest(n_estimators=100, contamination=train fraud rate, random_state=42)` — fit on **train only**, **no labels used**.
+- Anomaly threshold: percentile of **train** anomaly scores (`100 * (1 - contamination)`). Scoring runs on the **held-out test** set only — threshold does not see test scores.
+
+**Results vs supervised finalist (pre-calibration, same test split):**
+
+| Model | Type | Label used? | PR-AUC | Recall | Precision | F1 | Role |
+|-------|------|-------------|--------|--------|-----------|----|------|
+| Best supervised finalist (`catboost_plain` / `rf_plain`) | Supervised | Yes | ≈ 0.998 | ≈ 0.998 | ≈ 1.000 | ≈ 0.999 | Main path → calibration → deployment |
+| `Isolation Forest` | Anomaly | **No** | 0.0218 | 0.0134 | 0.0143 | 0.0138 | Benchmark only |
+
+**Interpretation:**
+- As a **standalone fraud detector — no.** Unsupervised structure alone does not isolate PaySim fraud anywhere close to the labeled supervised models.
+- As a **benchmark — yes.** It confirms (a) fraud signal is **not** trivially structural / leaked, and (b) the supervised gain comes from labels + chain features, not from anything an anomaly detector could trivially exploit.
+
+**Deployment decision:** Isolation Forest stays as a notebook benchmark. `FINAL_MODEL_KEY` = **calibrated CatBoost (`catboost_plain_sigmoid`)** from §12.8 — unchanged. IF output never feeds triage, SHAP, or Streamlit.
 
 ---
 
@@ -115,6 +188,11 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 
 ### B) Notebook outputs (modeling evidence)
 
+**Post-calibration leaderboard (notebook §12.8 — finalists × {uncalibrated, sigmoid, isotonic}):**
+![Notebook calibration leaderboard](assets/image-031cd849-c769-4df7-9b57-52b9ebb98e9c.png)
+
+> Reference run shown here covers `rf_plain` + `xgb_plain`; the checked-in `feature_metadata.json` adds `catboost_plain` (full nine-row table is in the [post-calibration leaderboard](#post-calibration-leaderboard-chain-aware-finalists-128) above).
+
 **Reliability / calibration comparison (RF vs XGB; uncalibrated/sigmoid/isotonic):**
 ![Calibration reliability plots](assets/image-1b21f940-7778-4311-8abb-f61e53b0b090.png)
 
@@ -135,40 +213,54 @@ The prototype has **five tabs**: Command Center, Dashboard, Batch upload, Drift 
 |------|--------|
 | Language | Python 3 |
 | Analysis | Jupyter, pandas, numpy |
-| ML | scikit-learn, joblib; notebook also uses **imbalanced-learn (SMOTE)** where configured, **XGBoost**, **LightGBM**, **CatBoost** (optional), **SHAP**, plotting libraries |
-| App | Streamlit |
+| Supervised ML | scikit-learn (`LogisticRegression`, `RandomForestClassifier`, `GaussianNB`, `CalibratedClassifierCV`), **XGBoost**, **LightGBM**, **CatBoost** (optional), **imbalanced-learn** (SMOTE, `BalancedRandomForestClassifier`) |
+| Anomaly baseline | scikit-learn `IsolationForest` (notebook §12.7b, benchmark only) |
+| Explainability | **SHAP** (Tree SHAP on deploy booster, deployment) + **LIME** (notebook robustness cross-check) |
+| Monitoring | PSI feature drift + early-vs-late PR-AUC (no retraining) |
+| App | **Streamlit** (5 tabs: Command Center, Dashboard, Batch upload, Drift Monitor, Model Card) |
+| Local LLM (optional) | **Ollama** — analyst-style explanation layer; **never** changes scores or actions |
+| Persistence | `joblib` for preprocessor / calibrated model; `feature_metadata.json` for thresholds + model map |
 | Data | PaySim CSV (`PS_20174392719_1491204439457_log.csv`) — **gitignored by default** (large) |
 
-**Install (app only):**
+**Install everything (app + notebook):**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` already includes **SHAP** (used in both Streamlit and the notebook).
-
-**Notebook extras (install as needed — LIME is notebook-only):**
-
-```bash
-pip install jupyter matplotlib seaborn imbalanced-learn xgboost lightgbm catboost lime
-```
+`requirements.txt` already pins the full stack — **Streamlit, scikit-learn, XGBoost, LightGBM, CatBoost, imbalanced-learn, SHAP, LIME, matplotlib, seaborn, Ollama Python client**. No separate notebook-extras install step is required.
 
 ---
 
 ## Repository layout
 
 ```
-Group_Project/
-├── README.md
-├── requirements.txt
+PaySim-Fraud-Triage/
+├── README.md                                  # this file
+├── MODEL_CARD.md                              # deployed system model card (rendered inside Streamlit)
+├── requirements.txt                           # full stack: app + notebook + Ollama client
 ├── .gitignore
-├── app.py
-├── build_artifacts.py
-├── artifacts/                 # preprocessor, calibrated joblib(s), optional RF stub for SHAP fallback, feature_metadata.json (see below)
-├── assets/                    # banner SVG + README screenshots
-├── 01_eda_paysim.ipynb
-├── MODEL_CARD.md
-└── PS_20174392719_1491204439457_log.csv   # local only unless you use LFS / remove gitignore
+│
+├── 01_eda_paysim.ipynb                        # main notebook: EDA → models → calibration → triage → export
+├── 01_eda_paysim_tuning_sandbox.ipynb         # offline hyperparameter / tuning sandbox (not in deploy)
+│
+├── app.py                                     # Streamlit app (5 tabs)
+├── build_artifacts.py                         # quick RF-only fallback path to rebuild artifacts/
+├── streamlit_notebook_export.py               # helper used by the notebook's artifact-export cell
+│
+├── artifacts/                                 # preprocessor + calibrated joblib(s) + feature_metadata.json
+│   ├── preprocessor_paysim.joblib
+│   ├── feature_metadata.json                  # final_model_key, thresholds, calibration_model_file_map, metrics
+│   ├── catboost_plain_sigmoid_calibrated.joblib  # reference deploy scorer
+│   ├── catboost_plain_isotonic_calibrated.joblib
+│   ├── rf_plain_base.joblib                   # SHAP / fallback tree
+│   ├── rf_plain_isotonic_calibrated.joblib
+│   └── rf_selected_calibrated.joblib          # canonical alias
+│
+├── assets/                                    # banner SVGs + notebook + Streamlit screenshots
+├── sample_batch_input.csv                     # 9-row sample CSV for the Batch upload tab
+├── scripts/                                   # dev-only helpers
+└── PS_20174392719_1491204439457_log.csv       # raw PaySim data (gitignored; download separately)
 ```
 
 ---
@@ -176,18 +268,43 @@ Group_Project/
 ## Quick start
 
 ```bash
-cd Group_Project
+git clone https://github.com/Snehasingh-21/PaySim-Fraud-Triage.git
+cd PaySim-Fraud-Triage
+
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Place **`PS_20174392719_1491204439457_log.csv`** in the project root (see [PaySim on Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1) or your course mirror), then:
+Place **`PS_20174392719_1491204439457_log.csv`** in the project root (see [PaySim on Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1) or your course mirror), then either:
+
+**(A) Full reference path — use the checked-in CatBoost-led export.**
+
+```bash
+streamlit run app.py
+```
+
+The app reads `artifacts/feature_metadata.json` and the calibrated model file it points to (default: `catboost_plain_sigmoid`).
+
+**(B) Quick rebuild (RF-only) before launching.**
 
 ```bash
 python build_artifacts.py
 streamlit run app.py
 ```
+
+> **macOS note:** if Streamlit crashes with `Cannot start fsevents stream` (file-watcher segfault), disable the watcher:
+> ```bash
+> streamlit run app.py --server.fileWatcherType=none
+> ```
+
+To test the **Batch upload** tab without crafting your own CSV, upload the included sample:
+
+```
+sample_batch_input.csv      # 9 rows, all 9 required columns
+```
+
+You can also click **"Download sample CSV"** inside the Batch upload tab.
 
 ### Streamlit, artifacts, and “dynamic” scoring
 
@@ -229,3 +346,66 @@ Batch scoring assumes chain fields are **precomputed** (mirroring offline EDA). 
 ## Data note
 
 `PS_20174392719_1491204439457_log.csv` is large and gitignored by default. Use Git LFS only if you want to version the raw file.
+
+---
+
+## Reproducibility
+
+- **Random seed:** a single `RANDOM_STATE` is reused across `train_test_split`, SMOTE, sklearn models, XGBoost, LightGBM, CatBoost, and the Isolation Forest baseline. Rerunning the notebook end-to-end produces the same split and the same calibrated metrics that are checked into `artifacts/feature_metadata.json`.
+- **Pinned stack:** `requirements.txt` pins the exact libraries used. Any change to scikit-learn / XGBoost / LightGBM / CatBoost / SHAP versions can change tree internals or calibration outputs.
+- **Split-safe chain features:** `chain_size` / `is_chain_member` are computed **separately** for the train and test splits so test rows never inform train statistics (see §12.2 / §12.3 in the notebook).
+- **Metadata-driven app:** Streamlit never hard-codes a model name. The deploy scorer, all three triage thresholds, and the chain cap are read from `artifacts/feature_metadata.json` at startup, so rerunning §12.9b in the notebook is enough to refresh the app's behavior.
+- **Artifact freshness:** with `AUTO_REBUILD_IF_STALE=1` (default), Streamlit will run `build_artifacts.py` if the notebook is newer than the artifacts (RF-only fallback). For a CatBoost-led deploy, rerun §12.9b in the notebook instead.
+
+---
+
+## Optional: Local LLM analyst (Ollama)
+
+The Dashboard tab can call a **local** LLM via the **Ollama** runtime to produce a short analyst-style summary of the decision (probability, action, top SHAP drivers). The model score and the triage action **never** come from the LLM.
+
+**Setup:**
+
+1. Install Ollama from [ollama.com](https://ollama.com) and start the daemon.
+2. Pull a small instruction model, e.g.:
+   ```bash
+   ollama pull llama3.1:8b
+   ```
+3. The Python client is already in `requirements.txt`. Restart Streamlit; the Dashboard will pick up the local Ollama endpoint automatically.
+
+**Disable:** if Ollama isn't running, the Dashboard simply hides the analyst summary block — scoring, SHAP, and triage continue to work.
+
+---
+
+## Validation & explainability checks (notebook)
+
+Beyond headline PR-AUC / ROC-AUC / Brier on the held-out test set, the notebook adds:
+
+- **Bootstrap PR-AUC 95% CI** (§12.9a) on the same calibrated finalist used at deploy time.
+- **Threshold sweep + cost-aware selection** (§12.9b) — FP cost 5, FN cost 500 — yielding `review_threshold`, `block_threshold`, `moderate_cutoff`.
+- **SHAP global + local** on the deploy booster's inner tree (CatBoost / XGB / RF unwrap) plus a **LIME** cross-check on one blocked transaction.
+- **Error analysis** — false negatives and false positives broken down by `type`, `amount` band, and chain state.
+- **PSI drift monitor** (`step <= 400` vs `step > 400`) — feature-level PSI + early/late PR-AUC. No retraining; reported in the Drift Monitor tab.
+
+---
+
+## Roadmap / future work
+
+- **Streaming-safe chain state.** Replace the offline groupby with an event-time-bounded state store so `chain_size` / `is_chain_member` reflect only history available **before** the decision point.
+- **Pre-balance features only.** Move away from post-transaction balance columns to keep the model deployable in real-time scoring paths.
+- **Auto-retraining trigger.** Wire the PSI / early-vs-late PR-AUC monitor to a controlled retraining job instead of just dashboarding it.
+- **More calibrators.** Try Platt + isotonic ensembling and beta calibration for the long-tail probability region.
+- **Cost surface.** Expose FP / FN costs in the Streamlit sidebar so reviewers can replay the threshold sweep interactively.
+
+---
+
+## Acknowledgements & data attribution
+
+- **Dataset:** [PaySim — Synthetic Financial Datasets For Fraud Detection](https://www.kaggle.com/datasets/ealaxi/paysim1) by Edgar Lopez-Rojas.
+- **Libraries:** scikit-learn, XGBoost, LightGBM, CatBoost, imbalanced-learn, SHAP, LIME, Streamlit, Ollama.
+- **Project author:** [@Snehasingh-21](https://github.com/Snehasingh-21).
+
+---
+
+## License
+
+This repository is released for **academic / research use**. No production-readiness or fitness-for-purpose claims are made — see `MODEL_CARD.md` §11 ("Limitations") and the [Limitations](#limitations-for-reports--defense) section above. If you intend to reuse code or figures, please cite this repository and the PaySim dataset.
