@@ -11,7 +11,7 @@ Submit this **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-
 **One-click links (for professor review):**
 - **Notebook (`.ipynb`)**: [Open notebook](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/01_eda_paysim.ipynb)
 - **Notebook report (`.html`)**: [Open HTML report](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/reports/01_eda_paysim_with_outputs.html)
-- **Live report (GitHub Pages)**: [Open rendered report](https://snehasingh-21.github.io/PaySim-Fraud-Triage/report.html)
+- **Live report (GitHub Pages)**: [Open rendered report](https://snehasingh-21.github.io/PaySim-Fraud-Triage/report_latest.html)
 - **Streamlit screenshots gallery**: [Jump to Streamlit screenshots](#a-streamlit-app-screens)
 
 | Deliverable | Location |
