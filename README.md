@@ -6,7 +6,7 @@
 
 ### Course submission (notebook + Streamlit + visible results)
 
-Submit this **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage).
+ **GitHub repo URL**: [https://github.com/Snehasingh-21/PaySim-Fraud-Triage](https://github.com/Snehasingh-21/PaySim-Fraud-Triage).
 
 **One-click links (for professor review):**
 - **Notebook (`.ipynb`)**: [Open notebook](https://github.com/Snehasingh-21/PaySim-Fraud-Triage/blob/main/01_eda_paysim.ipynb)
