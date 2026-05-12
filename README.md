@@ -21,6 +21,14 @@
 
 The notebook and the app share one consistent scoring contract: **`artifacts/`** matches the notebook’s **`final_model_key`** / calibration export.
 
+### Run Streamlit locally
+
+1. Install dependencies:
+   `pip install -r requirements.txt`
+2. Ensure the PaySim CSV file is present in the repo root (default: `PS_20174392719_1491204439457_log.csv`).
+3. Start the app from repo root:
+   `streamlit run app.py`
+
 **Course / research-style ML project** on the synthetic **PaySim** mobile-money dataset: exploratory analysis, **leakage-aware** feature design, **no-chain vs chain-aware** model comparison, **probability calibration**, **cost-sensitive** triage rules, **drift monitoring (PSI)**, and a **Streamlit** deployment for interactive single-transaction scoring + CSV batch scoring (with an optional local-LLM analyst summary via **Ollama**).
 
 ![Chain-aware fraud detection & triage framework (split-safe & interpretable)](assets/ml_framework_chain_aware.png)
