@@ -490,7 +490,7 @@ Beyond headline PR-AUC / ROC-AUC / Brier on the held-out test set, the notebook 
 
 - **Dataset:** [PaySim — Synthetic Financial Datasets For Fraud Detection](https://www.kaggle.com/datasets/ealaxi/paysim1) by Edgar Lopez-Rojas.
 - **Libraries:** scikit-learn, XGBoost, LightGBM, CatBoost, imbalanced-learn, SHAP, LIME, Streamlit, Ollama.
-- **Project author:** [@Snehasingh-21](https://github.com/Snehasingh-21).
+
 
 ---
 
